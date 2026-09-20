@@ -1,0 +1,50 @@
+# Regions — grouping WITHOUT a bounding box.
+#
+# A `~region` groups nodes visually but does NOT contain them: its `$`-members
+# stay top-level, so the layout engine places them by their real connectivity
+# (here, organic `stress`), and the region is drawn afterwards as a backdrop
+# around wherever they landed. Contrast with a `$group` compound, whose children
+# are boxed and packed inside the parent.
+#
+# Sigil: regions use `~` (a soft/approximate grouping). `#` can't be a YAML key.
+
+title: Regions — grouping without a bounding box
+
+relations:
+  input: { direction: in }
+  output: { direction: out }
+
+types:
+  rule:
+    meta: ["{{ data.tool }}"]
+
+diagram:
+  algorithm: stress # organic best-placement; members are NOT boxed
+  spacing: 44
+  deoverlap: true
+
+nodes:
+  ~ingest:
+    label: Ingest
+    class: ingest
+    $fetch: { type: rule, tool: fetch.sh, output: { data: $raw } }
+    $raw: { type: file, label: raw.csv }
+    $parse: { type: rule, tool: parse.py, input: { data: $raw }, output: { rows: $rows } }
+
+  $rows: { type: file, label: rows.parquet } # hub artifact, in no region
+
+  ~analyze:
+    label: Analyze
+    class: analyze
+    $stats: { type: rule, tool: stats.py, input: { rows: $rows }, output: { summary: $summary } }
+    $plot: { type: rule, tool: plot.py, input: { rows: $rows }, output: { fig: $fig } }
+
+  $summary: { type: file, label: summary.json }
+  $fig: { type: file, label: fig.png }
+
+  $report:
+    type: rule
+    tool: report.py
+    input: { summary: $summary, fig: $fig }
+    output: { pdf: $out }
+  $out: { type: file, label: report.pdf }

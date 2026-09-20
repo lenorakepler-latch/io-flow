@@ -149,6 +149,45 @@ def test_unmarked_top_level_key_is_error():
         parse({"nodes": {"loose_data": {"type": "file"}}})
 
 
+def test_region_members_stay_top_level_and_are_recorded():
+    """A `~region` groups visually without containing: its members keep
+    parent=None (free layout) and the region is recorded with their ids."""
+    graph = parse(
+        {
+            "nodes": {
+                "~ingest": {
+                    "label": "Ingest",
+                    "class": "phase",
+                    "$fetch": {"type": "rule"},
+                    "$parse": {"type": "rule", "calls": {"$fetch": ""}},
+                },
+                "$report": {"calls": {"$parse": ""}},
+            }
+        }
+    )
+    # Members are NOT children of the region -- no containment.
+    assert _node(graph, "fetch")["parent"] is None
+    assert _node(graph, "parse")["parent"] is None
+    assert _node(graph, "fetch")["region"] == "ingest"
+    # Edges across / out of the region still resolve (calls: owner -> ref).
+    assert ("parse", "fetch") in _edge_set(graph)
+    assert ("report", "parse") in _edge_set(graph)
+    # The region is recorded for the viewer's backdrop.
+    (region,) = graph["regions"]
+    assert region == {
+        "id": "ingest",
+        "label": "Ingest",
+        "members": ["fetch", "parse"],
+        "class": "phase",
+    }
+
+
+def test_region_nested_in_a_node_is_an_error():
+    """Regions are top-level only (MVP): a `~` inside a node is rejected."""
+    with pytest.raises(ValueError, match="region"):
+        parse({"nodes": {"$g": {"type": "group", "~inner": {"$a": {}}}}})
+
+
 def test_dots_in_names_are_legal_and_meaningless():
     """Dots carry no structure -- they're a natural way to hand-uniquify
     common names ($Config.run vs $Runner.run)."""

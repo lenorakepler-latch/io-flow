@@ -383,6 +383,7 @@ window.IOFlow = window.IOFlow || {};
     });
     applyGeometry(state, eps);
     resize(state);
+    if (IOF.regions) IOF.regions.renderAll(state); // draw region backdrops behind nodes
   }
 
   // Re-route on drag/nudge. Anchor stacks depend on neighbors' relative
@@ -392,6 +393,7 @@ window.IOFlow = window.IOFlow || {};
   // is cheap. The nodeId argument is kept for API compatibility.
   function updateFor(state, _nodeId) {
     applyGeometry(state, computeGeometry(state));
+    if (IOF.regions) IOF.regions.renderAll(state); // keep backdrops under dragged nodes
   }
 
   function resize(state) {

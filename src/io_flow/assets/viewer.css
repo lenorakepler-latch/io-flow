@@ -722,3 +722,26 @@ body.connecting #viewport .node {
 body:not(.ready) #canvas {
   visibility: hidden;
 }
+
+/* Regions (regions.js): a visual grouping drawn behind everything from member
+ * positions -- no layout containment. Style per region with `.region--<class>`
+ * (from a `~region`'s `class:`). Recolor the two vars to theme it. */
+.regions {
+  pointer-events: none;
+}
+.region__box {
+  fill: var(--region-fill, rgba(120, 130, 150, 0.07));
+  stroke: var(--region-stroke, rgba(120, 130, 150, 0.4));
+  stroke-width: 1.5;
+  stroke-dasharray: 7 5;
+}
+.region__label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* Halo the label in the surface colour so it stays legible over edges. */
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}

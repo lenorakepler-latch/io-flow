@@ -25,6 +25,7 @@ SCRIPT_MANIFEST = [
     "templates.js",
     "engine/layout.js",
     "engine/edges.js",
+    "engine/regions.js",
     "engine/dim.js",
     "engine/pan.js",
     "engine/drag.js",

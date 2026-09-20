@@ -92,6 +92,12 @@ from ruamel.yaml import YAML
 from .emit import SKIN_SUFFIXES
 
 SIGIL = "$"
+# A region groups nodes *visually* without containing them: its `$`-members
+# stay top-level (parent unchanged, free to lay out by connectivity) and the
+# region is drawn afterwards as a backdrop around wherever they land. `#` can't
+# be a YAML key (it starts a comment), so regions use `~` -- read as a soft,
+# approximate grouping, the opposite of a hard bounding box.
+REGION_SIGIL = "~"
 DEFAULT_TYPE = "node"
 
 
@@ -478,6 +484,9 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                     if isinstance(value, str):
                         literals.append((node_id, edge_type, value))
 
+    regions: list[dict[str, Any]] = []
+    region_ids: set[str] = set()
+
     def add_node(
         name: str,
         spec: Any,
@@ -507,6 +516,11 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         seen.add(node_id)
 
         label = spec.get("label")
+        if any(str(k).startswith(REGION_SIGIL) for k in spec):
+            raise ValueError(
+                f"{SIGIL}{node_id}: a region ({REGION_SIGIL}...) can only be declared "
+                f"at the top level of nodes:, not nested inside a node"
+            )
         children = {k: v for k, v in spec.items() if str(k).startswith(SIGIL)}
         # An untyped node falls back to what it structurally *is*: `group` when
         # it holds children, `node` when it doesn't. It renders through
@@ -605,14 +619,60 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         for child_key, child_spec in children.items():
             add_node(_strip(str(child_key)), child_spec, node_id, node_type)
 
+    def add_region(rid: str, spec: Any) -> None:
+        """A `~id` block: declare its `$`-members as ordinary top-level nodes
+        (parent stays None -- no containment) and record the region so the
+        viewer can draw a backdrop around them. Non-`$` keys are region data
+        (label, class, ...)."""
+        if not rid:
+            raise ValueError(f"invalid region name {REGION_SIGIL!r}: must be non-empty")
+        if not isinstance(spec, dict):
+            raise ValueError(f"region {REGION_SIGIL}{rid}: spec must be a mapping, got {spec!r}")
+        if rid in region_ids:
+            raise ValueError(f"duplicate region {REGION_SIGIL}{rid}")
+        if any(str(k).startswith(REGION_SIGIL) for k in spec):
+            raise ValueError(f"region {REGION_SIGIL}{rid}: regions cannot nest (MVP)")
+        member_items = [(k, v) for k, v in spec.items() if str(k).startswith(SIGIL)]
+        if not member_items:
+            raise ValueError(
+                f"region {REGION_SIGIL}{rid}: has no members "
+                f"(nest {SIGIL}node declarations under it)"
+            )
+        members: list[str] = []
+        for mkey, mspec in member_items:
+            idx = len(nodes)
+            add_node(_strip(str(mkey)), mspec, None, None)  # top-level: no containment
+            nodes[idx]["region"] = rid  # tag only the member itself, not its subtree
+            members.append(nodes[idx]["id"])
+        region_data = {
+            str(k): v
+            for k, v in spec.items()
+            if not str(k).startswith(SIGIL) and str(k) not in ("label", "class")
+        }
+        region: dict[str, Any] = {
+            "id": rid,
+            "label": str(spec.get("label") if spec.get("label") is not None else rid),
+            "members": members,
+        }
+        if spec.get("class") is not None:
+            region["class"] = str(spec["class"])
+        if region_data:
+            region["data"] = _plain(region_data)
+        regions.append(region)
+        region_ids.add(rid)
+
     for key, spec in (data.get("nodes", {}) or {}).items():
         key = str(key)
-        if not key.startswith(SIGIL):
+        if key.startswith(REGION_SIGIL):
+            add_region(key[len(REGION_SIGIL):], spec)
+        elif key.startswith(SIGIL):
+            add_node(_strip(key), spec, None, None)
+        else:
             raise ValueError(
                 f"nodes.{key}: top-level entries under nodes: must be node "
-                f"declarations ({SIGIL}{key}); there is no node to attach data to"
+                f"declarations ({SIGIL}{key}) or regions ({REGION_SIGIL}{key}); "
+                f"there is no node to attach data to"
             )
-        add_node(_strip(key), spec, None, None)
 
     # `defaults:` keys are parent *types*; writing a node name there (the
     # tempting reading of `projects: dir`) is a silent no-op otherwise.
@@ -779,6 +839,8 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         unique.append(edge)
 
     graph: dict[str, Any] = {"nodes": nodes, "edges": unique}
+    if regions:
+        graph["regions"] = regions
     if file_contents:
         graph["fileContents"] = file_contents
     # Which node keys were relation blocks rather than free data -- built-ins
