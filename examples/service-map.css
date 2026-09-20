@@ -1,0 +1,25 @@
+/* Per-region tint for service-map.yaml. Each region's `class:` becomes a
+   .region--<class> on its backdrop <g>; set the two region vars on the box. */
+.region--clients .region__box {
+  --region-fill: rgba(59, 130, 246, 0.08);
+  --region-stroke: rgba(59, 130, 246, 0.55);
+}
+.region--services .region__box {
+  --region-fill: rgba(16, 185, 129, 0.08);
+  --region-stroke: rgba(16, 185, 129, 0.55);
+}
+.region--data .region__box {
+  --region-fill: rgba(217, 119, 6, 0.09);
+  --region-stroke: rgba(217, 119, 6, 0.55);
+}
+
+/* Badge accents by type, so the three kinds read apart inside the regions. */
+.node--service .node__badge {
+  background: #10b981;
+}
+.node--store .node__badge {
+  background: #d97706;
+}
+.node--client .node__badge {
+  background: #3b82f6;
+}

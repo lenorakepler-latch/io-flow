@@ -1,0 +1,64 @@
+# Regions showcase — a service map grouped WITHOUT bounding boxes.
+#
+# `~clients`, `~services`, `~data` are regions: their `$`-members stay
+# top-level, so `stress` places every node by its real connectivity and the
+# regions are drawn as backdrops around wherever the members land. Because a
+# member is never boxed, a store that several services hit is pulled to sit
+# between them, and `$cdn` (in no region) floats freely at the edge.
+#
+# Compare: as `$group` compounds, each cluster would be a rigid box and the
+# heavily-shared stores couldn't drift toward the services that use them.
+
+title: Service map — regions (no bounding box)
+
+relations:
+  calls: { direction: out } # caller -> callee
+  uses: { direction: out } # service -> datastore
+
+types:
+  service: { badge: svc, meta: ["{{ data.role }}"] }
+  store: { badge: store, meta: ["{{ data.kind }}"] }
+  client: { badge: client }
+
+style:
+  skin: service-map.css # per-region tint via .region--<class>
+
+diagram:
+  algorithm: stress # organic; members are not contained
+  spacing: 46
+  deoverlap: true
+
+nodes:
+  ~clients:
+    label: Clients
+    class: clients
+    $web: { type: client }
+    $mobile: { type: client }
+
+  # In no region: a shared edge node that floats between clients and services.
+  $cdn: { type: service, role: edge cache, calls: { $gateway: "" } }
+
+  ~services:
+    label: Services
+    class: services
+    $gateway:
+      type: service
+      role: API gateway
+      calls: { $auth: "", $orders: "", $payments: "" }
+    $auth: { type: service, role: sessions, uses: { $userdb: "", $cache: "" } }
+    $orders: { type: service, role: order mgmt, uses: { $orderdb: "", $queue: "" } }
+    $payments: { type: service, role: billing, uses: { $orderdb: "", $queue: "" } }
+    $worker: { type: service, role: async jobs, uses: { $queue: "", $orderdb: "" } }
+
+  ~data:
+    label: Data
+    class: data
+    $userdb: { type: store, kind: postgres }
+    $orderdb: { type: store, kind: postgres }
+    $cache: { type: store, kind: redis }
+    $queue: { type: store, kind: rabbitmq }
+
+edges:
+  - { from: $web, to: $cdn, type: calls }
+  - { from: $mobile, to: $gateway, type: calls }
+  - { from: $web, to: $gateway, type: calls }
