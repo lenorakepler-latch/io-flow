@@ -36,17 +36,41 @@ types:
     extends: group # question/purpose/interpretation stay in the sidebar, not the header
 
 diagram:
+  # Organic best-placement: `stress` optimises edge lengths only — no ranks, no
+  # column grid, and it ignores the order nodes appear in this file. `deoverlap`
+  # pushes the group boxes apart afterwards (stress doesn't keep compounds from
+  # overlapping). For a layered top-to-bottom flow instead, set `engine: dagre`
+  # (or `algorithm: layered`).
+
+  engine: elk
+  algorithm: mrtree # layered mrtree
   direction: DOWN
-  spacing: 28
-  layerSpacing: 60
-  engine: dagre # this diagram lays out better with dagre than ELK (set `elk` or omit for ELK)
-  # dagre-only passthrough (highest precedence): { ranker: network-simplex, align: DL, edgesep: 12 }
-  elk: # ignored while engine is dagre; kept for an easy A/B by flipping `engine`
-    elk.layered.nodePlacement.strategy: NETWORK_SIMPLEX
-    elk.layered.considerModelOrder.strategy: NODES_AND_EDGES
+  elk:
+    # elk.layered.nodePlacement.strategy: BRANDES_KOEPF # BRANDES_KOEPF | NETWORK_SIMPLEX | SIMPLE | LINEAR_SEGMENTS
+    # elk.layered.considerModelOrder.strategy: NODES_AND_EDGES # bias order toward YAML order
     elk.layered.crossingMinimization.strategy: LAYER_SWEEP
-    elk.layered.thoroughness: "30"
-    elk.layered.spacing.edgeNodeBetweenLayers: "15"
+    elk.layered.cycleBreaking.strategy: SCC_CONNECTIVITY
+    elk.layered.thoroughness: "1"
+    elk.aspectRatio: "2"
+    elk.partitioning.activate: true
+    elk.layered.directionCongruency: ROTATION # ROTATION | READING_DIRECTION
+    elk.alg.layered.options.LayeringStrategy: STRETCH_WIDTH
+    elk.layered.layering.strategy: COFFMAN_GRAHAM
+    # elk.separateConnectedComponents: false
+    elk.layered.wrapping.additionalExecution: true
+    elk.layered.considerModelOrder.strategy: NONE
+    elk.layered.layerUnzipping.strategy: ALTERNATING
+    # elk.alg.mrtree.options.OrderWeighting: CONSTRAINT # FAN # DESCENDANTS
+    # elk.topdown.nodeType: PARALLEL_NODE # HIERARCHICAL_NODE
+
+  # engine: dagre
+  # dagre:
+  #   ranker: tight-tree
+  #   align: UL
+
+  # algorithm: stress
+  # spacing: 32
+  # deoverlap: true
 
 legend:
   title: what things are
@@ -62,37 +86,35 @@ nodes:
   # ACQUIRE INPUTS (flat — downloads feed every stage, so no group)
   # Public reads and reference databases the processing steps map/search against.
   # ###########################################################################
-  $download_reads:
-    type: rule
-    tool: fetch_ena_run.sh
-    desc: Download enriched Illumina reads for one sample (BioProject PRJNA679286).
-    params: { bioproject: PRJNA679286 }
-    output: { reads: $reads }
-  $reads:
-    {
-      type: file,
-      label: reads,
-      path: "resources/reads/{sample}_R{1,2}.fastq.gz",
-    }
+  # $download_reads:
+  #   type: rule
+  #   tool: fetch_ena_run.sh
+  #   desc:
+  #   params: { bioproject: PRJNA679286 }
+  #   output: { reads: $reads }
 
-  $download_human_reference:
-    type: rule
-    tool: fetch_grch37.sh
-    desc: Human reference for host-read removal (GRCh37 / hg19).
-    output: { ref: $grch37 }
-  $grch37: { type: file, path: "resources/reference/GRCh37.fa" }
+  $reads:
+    type: file
+    label: reads
+    path: "resources/reads/{sample}_R{1,2}.fastq.gz"
+    description: Download enriched Illumina reads for one sample (BioProject PRJNA679286).
+
+  $grch37:
+    type: file
+    path: "resources/reference/GRCh37.fa"
+    description: Human reference for host-read removal (GRCh37 / hg19).
 
   $download_contaminant_db:
     type: rule
     tool: fetch_contaminants.sh
-    desc: rRNA / common-contaminant reference for the post-host screen.
+    desc:
     output: { ref: $contaminants_db }
+
   $contaminants_db:
-    {
-      type: file,
-      label: contaminants,
-      path: "resources/reference/contaminants.fa",
-    }
+    type: file,
+    label: contaminants
+    path: "resources/reference/contaminants.fa"
+    description: rRNA / common-contaminant reference for the post-host screen
 
   $download_typing_db:
     type: rule
@@ -155,6 +177,15 @@ nodes:
       path: "resources/nanopore/{sample}.fastq.gz",
     }
 
+  $fastqc_raw:
+    type: rule
+    tool: fastqc
+    desc: "FastQC on the raw reads: per-sample quality report before trimming."
+    input: { reads: $reads }
+    output: { report: $fastqc_report }
+  $fastqc_report:
+    { type: file, label: fastqc, path: "results/qc/fastqc/{sample}_fastqc.zip" }
+
   # ###########################################################################
   # UPSTREAM STAGE 1 — READ QC AND HOST REMOVAL (grouped: wiring is internal)
   # ###########################################################################
@@ -163,19 +194,6 @@ nodes:
     question: Which reads are real, non-human, non-contaminant sequence worth assembling?
     purpose: Turn raw enriched reads into a clean per-sample read set; tallies feed Figure S1.
     interpretation: Anelloscope enrichment yields a high anellovirus fraction per sample.
-
-    $fastqc_raw:
-      type: rule
-      tool: fastqc
-      desc: "FastQC on the raw reads: per-sample quality report before trimming."
-      input: { reads: $reads }
-      output: { report: $fastqc_report }
-    $fastqc_report:
-      {
-        type: file,
-        label: fastqc,
-        path: "results/qc/fastqc/{sample}_fastqc.zip",
-      }
 
     $bbduk_trim:
       type: rule
@@ -242,12 +260,12 @@ nodes:
       input: { reads: $screened }
       output: { reads: $clean }
 
-    $count_reads:
-      type: rule
-      tool: count_reads.sh
-      desc: Count total vs anellovirus reads per sample (tally for Figure S1).
-      input: { raw: $reads, clean: $clean }
-      output: { counts: $read_counts }
+  $count_reads:
+    type: rule
+    tool: count_reads.sh
+    desc: Count total vs anellovirus reads per sample (tally for Figure S1).
+    input: { raw: $reads, clean: $clean }
+    output: { counts: $read_counts }
 
   # clean reads and read counts leave stage 1 -> hoisted to the top level.
   $clean:
@@ -258,6 +276,13 @@ nodes:
       label: read_counts,
       path: "results/qc/read_counts/{sample}.tsv",
     }
+
+  $ccfind_circular:
+    type: rule
+    tool: ccfind
+    desc: "ccfind: identify contigs that circularise (candidate complete genomes)."
+    input: { nr: $nr_contigs }
+    output: { circular: $circular_contigs }
 
   # ###########################################################################
   # UPSTREAM STAGE 2 — ASSEMBLY AND CIRCULAR-GENOME RECOVERY (grouped)
@@ -290,20 +315,13 @@ nodes:
       input: { contigs: $contigs }
       output: { contigs: $contigs_dust }
 
-    $vsearch_dereplicate:
-      type: rule
-      tool: vsearch --cluster_fast
-      desc: Pool all filtered contigs, dereplicate at 99.5% identity into one non-redundant set.
-      params: { identity: "0.995" }
-      input: { contigs: $contigs_dust }
-      output: { nr: $nr_contigs }
-
-    $ccfind_circular:
-      type: rule
-      tool: ccfind
-      desc: "ccfind: identify contigs that circularise (candidate complete genomes)."
-      input: { nr: $nr_contigs }
-      output: { circular: $circular_contigs }
+  $vsearch_dereplicate:
+    type: rule
+    tool: vsearch --cluster_fast
+    desc: Pool all filtered contigs, dereplicate at 99.5% identity into one non-redundant set.
+    params: { identity: "0.995" }
+    input: { contigs: $contigs_dust }
+    output: { nr: $nr_contigs }
 
   # Hubs leaving stage 2 -> top level.
   $contigs_dust:
@@ -620,6 +638,13 @@ nodes:
   $fig3_pdf:
     { type: file, label: figure_3.pdf, path: "results/figures/figure_3.pdf" }
 
+  $genus_orf1_fasta:
+    type: rule
+    tool: split_by_genus.py
+    desc: Per-genus amino-acid split of study lineages (Alpha/Beta/Gamma).
+    input: { orf1: $orf1, genus: $contig_genus }
+    output: { fasta: $genus_fasta }
+
   # ###########################################################################
   # ANALYSIS — FIGURE 4 and TABLES S4/S5  (grouped: donor -> recipient transmission)
   # ###########################################################################
@@ -628,13 +653,6 @@ nodes:
     question: Do transfusions transmit donor lineages, do they persist, and does it depend on similarity?
     purpose: Classify donor lineages transmitted vs not, then compare within-genus AAI across strata.
     interpretation: Transmitted lineages persist >100 days; transmission is independent of resident similarity (~32% AAI).
-
-    $genus_orf1_fasta:
-      type: rule
-      tool: split_by_genus.py
-      desc: Per-genus amino-acid split of study lineages (Alpha/Beta/Gamma).
-      input: { orf1: $orf1, genus: $contig_genus }
-      output: { fasta: $genus_fasta }
 
     $genus_orf1_pmatrix:
       type: rule
@@ -997,7 +1015,7 @@ nodes:
   # ###########################################################################
   # ANALYSIS — NANOPORE VALIDATION (grouped)
   # ###########################################################################
-  $nanopore:
+  ~nanopore:
     type: stage
     question: Are the short-read assembled contigs real genomes, not assembly chimeras?
     purpose: Map independent Nanopore long reads to a subject's contigs to confirm end-to-end spanning.
@@ -1010,6 +1028,7 @@ nodes:
       params: { filtlong: "--min_length 2000 --keep_percent 90" }
       input: { reads: $nanopore_reads }
       output: { reads: $nanopore_filt }
+
     $nanopore_filt:
       {
         type: file,

@@ -1,0 +1,931 @@
+# =============================================================================
+# io-flow reconstruction of snakemake/Snakefile
+#
+#   Arze et al. (2021) "Global genome analysis reveals a vast and dynamic
+#   anellovirus landscape within the human virome." Cell Host & Microbe.
+#   doi:10.1016/j.chom.2021.07.001
+#
+# Every Snakemake `rule` is a node (type: rule); every input/output file is an
+# artifact node (type: file). The `input:`/`output:` relation blocks reproduce
+# the Snakemake filegraph: `output:` draws rule -> file, `input:` draws
+# file -> rule (see relations: below). Rules are grouped into the same stages
+# the Snakefile banners define; each stage group carries the banner's
+# question / purpose / interpretation as sidebar data.
+#
+# Scale note (from the Snakefile): the study covers 67 individuals / 128
+# samples; per-sample wildcards are collapsed here to one node per rule so the
+# DAG stays legible.
+# =============================================================================
+
+title: Anellovirus landscape (Arze 2021) — pipeline
+
+relations:
+  input: { direction: in } # file -> rule (this rule consumes the file)
+  output: { direction: out } # rule -> file (this rule produces the file)
+
+types:
+  rule:
+    badge: rule
+    meta: ["{{ data.tool }}"]
+  stage:
+    extends: group
+    meta: ["{{ data.question }}"]
+
+diagram:
+  direction: DOWN
+  spacing: 36
+  layerSpacing: 80
+
+legend:
+  title: what things are
+  nodes:
+    - rule: a Snakemake rule
+    - file: an input / output artifact
+  edges:
+    output: rule writes this file
+    input: file consumed by this rule
+
+nodes:
+  # ###########################################################################
+  # ACQUIRE INPUTS
+  # ###########################################################################
+  $acquire:
+    type: stage
+    question: What does the workflow start from?
+    purpose: >-
+      Public reads and the reference databases the processing steps map or
+      search against. Split out so every downstream rule has a producing rule
+      and no input dangles.
+
+    $download_reads:
+      type: rule
+      tool: fetch_ena_run.sh
+      desc: >-
+        Download enriched Illumina reads for one sample from the SRA/ENA copy
+        of BioProject PRJNA679286.
+      params: { bioproject: PRJNA679286 }
+      output: { r1: $reads_r1, r2: $reads_r2 }
+    $reads_r1: { type: file, path: "resources/reads/{sample}_R1.fastq.gz" }
+    $reads_r2: { type: file, path: "resources/reads/{sample}_R2.fastq.gz" }
+
+    $download_human_reference:
+      type: rule
+      tool: fetch_grch37.sh
+      desc: Human reference for host-read removal (NCBI build 37 / GRCh37 / hg19).
+      output: { ref: $grch37 }
+    $grch37: { type: file, path: "resources/reference/GRCh37.fa" }
+
+    $download_contaminant_db:
+      type: rule
+      tool: fetch_contaminants.sh
+      desc: rRNA / common-contaminant reference for the post-host screen.
+      output: { ref: $contaminants_db }
+    $contaminants_db:
+      { type: file, path: "resources/reference/contaminants.fa" }
+
+    $download_typing_db:
+      type: rule
+      tool: fetch_typing_db.sh
+      desc: >-
+        728-sequence anellovirus ORF1 typing database used to assign contigs to
+        a genus by tblastx.
+      output: { db: $typing_db }
+    $typing_db:
+      { type: file, path: "resources/reference/anello_typing_ORF1.fasta" }
+
+    # $download_public_anellovirus_genomes:
+    #   type: rule
+    #   tool: fetch_public_anelloviruses.sh
+    #   desc: >-
+    #     Curated public anellovirus genomes (the authors' non-study reference
+    #     set) pooled with study contigs to build the 2,101-sequence ORF1 dataset.
+    #   output: { genomes: $public_genomes }
+
+    $public_genomes:
+      type: file
+      path: "resources/reference/public_anellovirus_genomes.fasta"
+      desc: Curated public anellovirus genomes (the authors' non-study reference set) pooled with study contigs to build the 2,101-sequence ORF1
+
+    # $download_comparison_marker:
+    #   type: rule
+    #   tool: fetch_comparison_marker.sh
+    #   desc: >-
+    #     Curated protein marker set for each Figure-1 comparison virus (one gene
+    #     per virus, e.g. HIV env, HPV L1, dengue envelope).
+    #   output: { marker: $comparison_marker }
+
+    $comparison_marker:
+      { type: file, path: "resources/reference/comparison/{virus}.fasta" }
+
+    # $download_metadata:
+    #   type: rule
+    #   tool: fetch_metadata.sh
+    #   desc: >-
+    #     Cohort metadata: draw days, pan-anello PCR status, per-sample ORF1/contig
+    #     counts (BioLINCC TTVS descriptor for the study samples).
+    #   output: { metadata: $metadata }
+
+    $metadata:
+      {
+        type: file,
+        path: "resources/metadata/RingTx_transfusion1_metadata.csv",
+      }
+
+    # $download_nanopore:
+    #   type: rule
+    #   tool: fetch_ena_nanopore.sh
+    #   desc: Raw Oxford Nanopore long reads for a sample (contig-validation input).
+    #   params: { bioproject: PRJNA679286 }
+    #   output: { reads: $nanopore_reads }
+
+    $nanopore_reads:
+      { type: file, path: "resources/nanopore/{sample}.fastq.gz" }
+
+  # ###########################################################################
+  # UPSTREAM STAGE 1 — READ QC AND HOST REMOVAL
+  # ###########################################################################
+  $stage1_qc:
+    type: stage
+    question: Which reads are real, non-human, non-contaminant anellovirus sequence worth assembling?
+    purpose: >-
+      Turn raw enriched reads into a clean per-sample read set; the read tallies
+      here also feed Figure S1.
+    interpretation: >-
+      Anelloscope enrichment yields a high anellovirus fraction; the surviving
+      read counts quantify that per sample.
+
+    $fastqc_raw:
+      type: rule
+      tool: fastqc
+      desc: "FastQC on the raw reads: per-sample quality report before any trimming."
+      input: { r1: $reads_r1, r2: $reads_r2 }
+      output: { report: $fastqc_report }
+    $fastqc_report:
+      { type: file, path: "results/qc/fastqc/{sample}_R{1,2}_fastqc.zip" }
+
+    $bbduk_trim:
+      type: rule
+      tool: bbduk.sh
+      desc: Adapter and quality trimming with bbduk.
+      params:
+        {
+          opts: "ktrim=r k=23 mink=11 tpe tbo qtrim=rl trimq=20 minlength=50 maxns=2",
+        }
+      input: { r1: $reads_r1, r2: $reads_r2 }
+      output: { r1: $trimmed_r1, r2: $trimmed_r2 }
+    $trimmed_r1: { type: file, path: "results/trimmed/{sample}_R1.fastq.gz" }
+    $trimmed_r2: { type: file, path: "results/trimmed/{sample}_R2.fastq.gz" }
+
+    $remove_human_ngm:
+      type: rule
+      tool: ngm_remove_host.sh
+      desc: >-
+        Host removal, pass 1: sensitive mapping to GRCh37 with NextGenMap; keep
+        reads that do NOT map to human.
+      params: { opts: "--affine -s 0.7 -p" }
+      input: { r1: $trimmed_r1, r2: $trimmed_r2, ref: $grch37 }
+      output: { r1: $dehost1_r1, r2: $dehost1_r2 }
+    $dehost1_r1: { type: file, path: "results/dehost1/{sample}_R1.fastq.gz" }
+    $dehost1_r2: { type: file, path: "results/dehost1/{sample}_R2.fastq.gz" }
+
+    $remove_human_bwa:
+      type: rule
+      tool: bwa_remove_host.sh
+      desc: "Host removal, pass 2: a second BWA pass against GRCh37 catches human reads pass 1 missed."
+      input: { r1: $dehost1_r1, r2: $dehost1_r2, ref: $grch37 }
+      output: { r1: $dehost2_r1, r2: $dehost2_r2 }
+    $dehost2_r1: { type: file, path: "results/dehost2/{sample}_R1.fastq.gz" }
+    $dehost2_r2: { type: file, path: "results/dehost2/{sample}_R2.fastq.gz" }
+
+    $screen_contaminants:
+      type: rule
+      tool: bbmap.sh
+      desc: "rRNA / contaminant screen with bbmap: drop reads matching common contaminants."
+      params: { opts: "minid=0.95 bwr=0.16 bw=12" }
+      input: { r1: $dehost2_r1, r2: $dehost2_r2, ref: $contaminants_db }
+      output: { r1: $screened_r1, r2: $screened_r2 }
+    $screened_r1: { type: file, path: "results/screened/{sample}_R1.fastq.gz" }
+    $screened_r2: { type: file, path: "results/screened/{sample}_R2.fastq.gz" }
+
+    $dedupe_clumpify:
+      type: rule
+      tool: clumpify.sh
+      desc: >-
+        Duplicate removal with clumpify: collapse PCR/optical duplicates
+        introduced by rolling-circle amplification. Output is the assembly input.
+      input: { r1: $screened_r1, r2: $screened_r2 }
+      output: { r1: $clean_r1, r2: $clean_r2 }
+    $clean_r1: { type: file, path: "results/clean/{sample}_R1.fastq.gz" }
+    $clean_r2: { type: file, path: "results/clean/{sample}_R2.fastq.gz" }
+
+    $count_reads:
+      type: rule
+      tool: count_reads.sh
+      desc: Count total vs anellovirus reads per sample (tally for Figure S1).
+      input: { raw: $reads_r1, clean: $clean_r1 }
+      output: { counts: $read_counts }
+    $read_counts: { type: file, path: "results/qc/read_counts/{sample}.tsv" }
+
+  # ###########################################################################
+  # UPSTREAM STAGE 2 — ASSEMBLY AND CIRCULAR-GENOME RECOVERY
+  # ###########################################################################
+  $stage2_assembly:
+    type: stage
+    question: What anellovirus genomes are present in each sample?
+    purpose: >-
+      Assemble clean reads into contigs, dereplicate them, and flag the ones
+      that close into a circle (complete genomes).
+    interpretation: >-
+      1,656 high-quality contigs (median 2,916 bp); 190 complete circular
+      genomes recovered.
+
+    $metaspades_assemble:
+      type: rule
+      tool: metaspades.py
+      desc: "metaSPAdes assembly of the clean read pairs (assembly-only mode; reads already error-processed)."
+      params: { opts: "--only-assembler" }
+      input: { r1: $clean_r1, r2: $clean_r2 }
+      output: { contigs: $contigs }
+    $contigs: { type: file, path: "results/assembly/{sample}/contigs.fasta" }
+
+    $prinseq_lowcomplexity:
+      type: rule
+      tool: prinseq-lite.pl
+      desc: PRINSEQ low-complexity filter (DUST) to drop junk contigs.
+      params: { opts: "-lc_method dust -lc_threshold 20" }
+      input: { contigs: $contigs }
+      output: { contigs: $contigs_dust }
+    $contigs_dust:
+      { type: file, path: "results/assembly/{sample}/contigs.dust.fasta" }
+
+    $vsearch_dereplicate:
+      type: rule
+      tool: vsearch --cluster_fast
+      desc: >-
+        Pool every sample's filtered contigs, then dereplicate near-identical
+        sequences with VSEARCH at 99.5% identity — one non-redundant contig set
+        for the whole study.
+      params: { identity: "0.995" }
+      input: { contigs: $contigs_dust }
+      output: { nr: $nr_contigs }
+    $nr_contigs: { type: file, path: "results/contigs/anello_contigs.nr.fasta" }
+
+    $ccfind_circular:
+      type: rule
+      tool: ccfind
+      desc: "ccfind: identify contigs that circularise (candidate complete genomes)."
+      input: { nr: $nr_contigs }
+      output: { circular: $circular_contigs }
+    $circular_contigs:
+      { type: file, path: "results/contigs/anello_contigs.circular.fasta" }
+
+  # ###########################################################################
+  # UPSTREAM STAGE 3 — ORF ANNOTATION AND GENUS TYPING
+  # ###########################################################################
+  $stage3_orf_typing:
+    type: stage
+    question: Where is ORF1 (the capsid gene) on each contig, and which genus does the contig belong to?
+    purpose: >-
+      Extract the ORF1 protein marker used for every downstream diversity,
+      phylogeny, and abundance analysis, and label each contig Alpha/Beta/Gamma.
+    interpretation: >-
+      ORF1 is the one marker present across the whole family, so it anchors all
+      cross-genus comparisons.
+
+    $orfm_call:
+      type: rule
+      tool: orfm
+      desc: "OrfM: call ORFs on every non-redundant contig."
+      params: { opts: "-p -s -m 150" }
+      input: { nr: $nr_contigs }
+      output: { orfs: $all_orfs }
+    $all_orfs: { type: file, path: "results/orfs/all_orfs.faa" }
+
+    $filter_orf1:
+      type: rule
+      tool: filter_orf1.py
+      desc: >-
+        Keep only ORF1: proteins >=600 aa carrying the anellovirus ORF1 motif
+        (YNP..D.G..). Isolates the capsid marker from other ORFs.
+      params: { min_len: 600, motif: "YNP.{2}D.G.{2}" }
+      input: { orfs: $all_orfs }
+      output: { orf1: $orf1 }
+    $orf1: { type: file, path: "results/orfs/orf1.faa" }
+
+    $tblastx_genus:
+      type: rule
+      tool: tblastx_type.sh
+      desc: Assign each contig to a genus by tblastx against the 728-sequence typing DB.
+      input: { contigs: $nr_contigs, db: $typing_db }
+      output: { genus: $contig_genus }
+    $contig_genus: { type: file, path: "results/typing/contig_genus.tsv" }
+
+  # ###########################################################################
+  # UPSTREAM STAGE 4 — LINEAGE CLUSTERING AND ABUNDANCE
+  # ###########################################################################
+  $stage4_lineage:
+    type: stage
+    question: How many distinct lineages does each subject carry, and at what relative abundance over time?
+    purpose: >-
+      Define lineages by clustering ORF1 at 97.5% identity, then map each
+      sample's reads back to quantify per-lineage abundance.
+    interpretation: >-
+      Median 6 co-circulating lineages per subject, rising to a median 27 in
+      recipients; feeds Figures 3 and 4.
+
+    $cluster_lineages:
+      type: rule
+      tool: usearch -cluster_fast
+      desc: Cluster ORF1 proteins at 97.5% identity to define lineage centroids.
+      params: { identity: "0.975" }
+      input: { orf1: $orf1 }
+      output: { centroids: $lineage_centroids, membership: $lineage_membership }
+    $lineage_centroids:
+      { type: file, path: "results/lineages/orf1_lineages.faa" }
+    $lineage_membership:
+      { type: file, path: "results/lineages/orf1_lineage_membership.tsv" }
+
+    $novoalign_abundance:
+      type: rule
+      tool: novoalign_abundance.sh
+      desc: Map each sample's clean reads to the lineage centroids (Novoalign) for per-sample lineage counts.
+      params: { opts: "-H 15 -l 30 -t 500 -r Random -g 50 -x 6 -F STDFQ" }
+      input: { r1: $clean_r1, r2: $clean_r2, centroids: $lineage_centroids }
+      output: { counts: $abundance_counts }
+    $abundance_counts:
+      { type: file, path: "results/abundance/{sample}.counts.tsv" }
+
+    $recipient_rabund_table:
+      type: rule
+      tool: build_rabund.py
+      desc: >-
+        Assemble one recipient's samples into a relative-abundance table across
+        its timepoints (the R01..R15 *.rabund.final.txt files).
+      input: { counts: $abundance_counts }
+      output: { rabund: $rabund_table }
+    $rabund_table:
+      { type: file, path: "results/abundance/{recipient}.rabund.final.txt" }
+
+  # ###########################################################################
+  # DERIVE SEQUENCE SUBSETS
+  # Pull the specific sequence slices the recombination and identity analyses
+  # need out of the assembled/annotated contigs, so each has a producing rule.
+  # ###########################################################################
+  $derive_subsets:
+    type: stage
+    question: What sequence slices do the identity and recombination analyses need?
+    purpose: Extract per-feature, per-cluster and non-coding sequence sets from the annotated contigs.
+
+    $extract_feature:
+      type: rule
+      tool: extract_feature.py
+      desc: >-
+        Extract a genome feature (5'UTR, whole contig, ORF1 nt, ORF2 nt) across
+        all contigs, for the Figure-S3 SDT identity matrices.
+      input: { contigs: $nr_contigs, orfs: $all_orfs }
+      output: { feature: $feature_fasta }
+    $feature_fasta: { type: file, path: "results/features/{feature}.fasta" }
+
+    $build_coding_cluster:
+      type: rule
+      tool: build_cluster.py
+      desc: >-
+        Build a within-genus 80%-nucleotide-identity cluster's member set for
+        the Figure-5 recombination analysis.
+      params: { identity: "0.80" }
+      input: { contigs: $nr_contigs, genus: $contig_genus }
+      output: { cluster: $cluster_fasta }
+    $cluster_fasta:
+      { type: file, path: "results/clusters/anello_80.0_{cluster}.fasta" }
+
+    $extract_noncoding:
+      type: rule
+      tool: extract_noncoding.py
+      desc: >-
+        Extract a non-coding sequence set (5'UTR / whole non-coding / alpha
+        non-coding) for the Figure-S5 recombination analysis.
+      input: { contigs: $nr_contigs, orfs: $all_orfs }
+      output: { ncset: $noncoding_fasta }
+    $noncoding_fasta: { type: file, path: "results/noncoding/{ncset}.fasta" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 1  (+ Figure 2C shares its MDS)
+  # ###########################################################################
+  $fig1:
+    type: stage
+    question: How does anellome diversity compare to other well-known human/animal viruses?
+    purpose: >-
+      Project ORF1 (and each comparison virus's marker) into a distance-based
+      MDS space, and build the anellovirus ORF1 tree.
+    interpretation: >-
+      Anellovirus ORF1 occupies a far larger diversity space than any single
+      comparison virus — the anellome is exceptionally diverse and (foreshadowing
+      Figure 5) resists a clean tree.
+
+    $build_anello_orf1_dataset:
+      type: rule
+      tool: build_orf1_dataset.py
+      desc: "Build the 2,101-sequence ORF1 dataset: study lineage ORF1s pooled with curated public ORF1s."
+      input: { study: $orf1, public: $public_genomes }
+      output: { dataset: $orf1_dataset }
+    $orf1_dataset: { type: file, path: "results/figure_1/Anellos_ORF1.fasta" }
+
+    $align_anello_orf1:
+      type: rule
+      tool: mafft
+      desc: Align the anellovirus ORF1 amino-acid set with MAFFT (FFT-NS-i style refinement).
+      params: { opts: "--maxiterate 1000 --retree 2" }
+      input: { dataset: $orf1_dataset }
+      output: { aln: $orf1_aln }
+    $orf1_aln: { type: file, path: "results/figure_1/Anellos_ORF1.aln.fasta" }
+
+    $anello_orf1_pmatrix:
+      type: rule
+      tool: p_distance.py
+      desc: Pairwise amino-acid p-distance matrix from the ORF1 alignment (the MDS input).
+      input: { aln: $orf1_aln }
+      output: { pmatrix: $orf1_pmatrix }
+    $orf1_pmatrix:
+      { type: file, path: "results/figure_1/Anellos_ORF1.p_matrix.tsv" }
+
+    $anello_orf1_mds:
+      type: rule
+      tool: mds_embed.py
+      desc: Metric MDS embedding of the anellovirus ORF1 distance matrix.
+      input: { pmatrix: $orf1_pmatrix }
+      output: { mds: $anello_mds }
+    $anello_mds: { type: file, path: "results/figure_1/Anellos_MDS.csv" }
+
+    $align_comparison_marker:
+      type: rule
+      tool: mafft --auto
+      desc: Same align -> p-distance -> MDS chain for each comparison virus's marker (one leaf per virus).
+      input: { marker: $comparison_marker }
+      output: { aln: $comparison_aln }
+    $comparison_aln: { type: file, path: "results/figure_1/{virus}.aln.fasta" }
+
+    $comparison_pmatrix:
+      type: rule
+      tool: p_distance.py
+      desc: p-distance matrix for one comparison virus's marker alignment.
+      input: { aln: $comparison_aln }
+      output: { pmatrix: $comp_pmatrix }
+    $comp_pmatrix: { type: file, path: "results/figure_1/{virus}.p_matrix.tsv" }
+
+    $comparison_mds:
+      type: rule
+      tool: mds_embed.py
+      desc: MDS embedding for one comparison virus's marker.
+      input: { pmatrix: $comp_pmatrix }
+      output: { mds: $comp_mds }
+    $comp_mds: { type: file, path: "results/figure_1/{virus}_MDS.csv" }
+
+    $raxml_orf1_tree:
+      type: rule
+      tool: raxmlHPC-PTHREADS-SSE3
+      desc: >-
+        Maximum-likelihood ORF1 protein tree with RAxML (CAT rate model,
+        BLOSUM62) — the Figure-1 phylogeny.
+      params: { model: PROTCATBLOSUM62 }
+      input: { aln: $orf1_aln }
+      output: { tree: $orf1_tree }
+    $orf1_tree: { type: file, path: "results/figure_1/Anellos.RAxML.newick" }
+
+    $figure_1:
+      type: rule
+      tool: figure_1.py
+      desc: "Assemble Figure 1: MDS panels for anellovirus + every comparison virus, and the ORF1 tree."
+      input: { anello_mds: $anello_mds, comp_mds: $comp_mds, tree: $orf1_tree }
+      output: { pdf: $fig1_pdf }
+    $fig1_pdf: { type: file, path: "results/figures/figure_1.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 2A/B  (study design + sampling timeline)
+  # ###########################################################################
+  $fig2ab:
+    type: stage
+    question: What is the cohort structure and when was each sample drawn and PCR-positive?
+    purpose: >-
+      Lay out the 15 donor-recipient sets across the ~280-day post-transfusion
+      window, marking pan-anello PCR status and per-sample ORF1/contig yield.
+    interpretation: Establishes the longitudinal design the Figures 3-4 claims rest on.
+    $figure_2AB:
+      type: rule
+      tool: figure_2AB.R
+      desc: Render the study-design timeline from the sample metadata table.
+      input: { metadata: $metadata }
+      output: { pdf: $fig2ab_pdf }
+    $fig2ab_pdf: { type: file, path: "results/figures/figure_2AB.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 2C  (personal anellome in MDS space)
+  # ###########################################################################
+  $fig2c:
+    type: stage
+    question: Where does one individual's set of lineages sit within global ORF1 diversity space?
+    purpose: Overlay a subject's lineages on the Figure-1 anellovirus MDS.
+    interpretation: >-
+      Each person carries a near-globally-representative slice of anellovirus
+      diversity, not a narrow local clade.
+
+    $figure_2C:
+      type: rule
+      tool: figure_2C.py
+      desc: Overlay a subject's lineages on the anellovirus MDS embedding.
+      input: { mds: $anello_mds, membership: $lineage_membership }
+      output: { pdf: $fig2c_pdf }
+    $fig2c_pdf: { type: file, path: "results/figures/figure_2C.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 3  (personal anellome diversity over time)
+  # ###########################################################################
+  $fig3:
+    type: stage
+    question: How many lineages does each recipient carry, and how does composition change over timepoints?
+    purpose: Plot per-recipient relative abundance of lineages over time and count co-circulating lineages.
+    interpretation: >-
+      Recipients gain lineages after transfusion (median rises to 27; three
+      subjects >100) — the anellome is reshaped by the transfusion.
+
+    $figure_3:
+      type: rule
+      tool: figure_3.R
+      desc: Assemble Figure 3 from all 15 recipient relative-abundance tables.
+      input: { rabund: $rabund_table }
+      output: { pdf: $fig3_pdf }
+    $fig3_pdf: { type: file, path: "results/figures/figure_3.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 4 and TABLES S4/S5  (donor -> recipient transmission)
+  # ###########################################################################
+  $fig4_transmission:
+    type: stage
+    question: Do transfusions transmit donor lineages, do they persist, and does transmission depend on similarity?
+    purpose: >-
+      Classify each donor lineage transmitted vs not-transmitted from
+      post-transfusion abundance, then compare within-genus amino-acid identity
+      across transmitted / not-transmitted / resident strata.
+    interpretation: >-
+      Transmitted lineages persist >100 days (to ~260 days); transmission is
+      independent of similarity to resident lineages (median AAI ~32%).
+
+    $genus_orf1_fasta:
+      type: rule
+      tool: split_by_genus.py
+      desc: Per-genus amino-acid split of study lineages (Alpha/Beta/Gamma); reused by Figs 3, 4, S1, S4.
+      input: { orf1: $orf1, genus: $contig_genus }
+      output: { fasta: $genus_fasta }
+    $genus_fasta: { type: file, path: "results/genus/{genus}s_aa.fasta" }
+
+    $genus_orf1_pmatrix:
+      type: rule
+      tool: p_distance.py
+      desc: Per-genus amino-acid p-distance matrix (transmission-strata similarity input).
+      input: { fasta: $genus_fasta }
+      output: { pmatrix: $genus_pmatrix }
+    $genus_pmatrix:
+      { type: file, path: "results/genus/{genus}s_aa.p_matrix.tsv" }
+
+    $classify_transmission:
+      type: rule
+      tool: classify_transmission.py
+      desc: >-
+        Classify donor lineages transmitted (seen in recipient at >=2
+        post-transfusion timepoints) vs not-transmitted, from abundance tables.
+      input: { rabund: $rabund_table }
+      output: { transmitted: $transmitted, not_transmitted: $not_transmitted }
+    $transmitted:
+      {
+        type: file,
+        path: "results/transmission/all_donor_transmitted_anellos_2occs.csv",
+      }
+    $not_transmitted:
+      {
+        type: file,
+        path: "results/transmission/all_donor_not_transmitted_anellos.csv",
+      }
+
+    $table_S4:
+      type: rule
+      tool: table_S4.R
+      desc: "Table S4: the transmitted-lineage determination table."
+      input: { transmitted: $transmitted, metadata: $metadata }
+      output: { csv: $tableS4_csv }
+    $tableS4_csv: { type: file, path: "results/tables/table_S4.csv" }
+
+    $table_S5:
+      type: rule
+      tool: table_S5.R
+      desc: "Table S5: transmitted-lineage persistence over the timecourse."
+      input: { transmitted: $transmitted, metadata: $metadata }
+      output: { csv: $tableS5_csv }
+    $tableS5_csv: { type: file, path: "results/tables/table_S5.csv" }
+
+    $figure_4:
+      type: rule
+      tool: figure_4.py
+      desc: "Figure 4: similarity distributions across transmitted / not-transmitted / resident strata, per genus."
+      input:
+        {
+          pmats: $genus_pmatrix,
+          transmitted: $transmitted,
+          not_transmitted: $not_transmitted,
+        }
+      output: { pdf: $fig4_pdf }
+    $fig4_pdf: { type: file, path: "results/figures/figure_4.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE S1  (sequencing read counts)
+  # ###########################################################################
+  $figS1:
+    type: stage
+    question: How many total vs anellovirus reads did each sample yield?
+    purpose: Report the enrichment outcome per sample.
+    interpretation: Anelloscope enrichment gives a large anellovirus read fraction across samples.
+
+    $collate_read_counts:
+      type: rule
+      tool: collate_read_counts.py
+      desc: Combine per-sample read tallies into the two count tables the figure plots.
+      input: { counts: $read_counts }
+      output: { raw: $raw_counts, anello: $anello_counts }
+    $raw_counts: { type: file, path: "results/figure_S1/raw_read_counts.tsv" }
+    $anello_counts:
+      { type: file, path: "results/figure_S1/anello_read_counts.tsv" }
+
+    $figure_S1:
+      type: rule
+      tool: figure_S1.R
+      desc: Render Figure S1 read-count bars.
+      input: { raw: $raw_counts, anello: $anello_counts }
+      output: { pdf: $figS1_pdf }
+    $figS1_pdf: { type: file, path: "results/figures/figure_S1.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE S3  (pairwise identity across genome features)
+  # ###########################################################################
+  $figS3:
+    type: stage
+    question: How divergent are anelloviruses at different parts of the genome (5'UTR, contig, ORF1, ORF2)?
+    purpose: Compute SDT pairwise-identity matrices per feature and show their identity distributions.
+    interpretation: >-
+      The non-coding 5'UTR is far more conserved than the coding ORFs — the split
+      that motivates the separate non-coding recombination analysis (Figure S5).
+
+    $sdt_identity_matrix:
+      type: rule
+      tool: sdt_matrix.sh
+      desc: SDT (MAFFT-based) pairwise-identity matrix for one genome feature.
+      input: { feature: $feature_fasta }
+      output: { matrix: $sdt_matrix }
+    $sdt_matrix: { type: file, path: "results/figure_S3/{feature}_mat.txt" }
+
+    $figure_S3:
+      type: rule
+      tool: figure_S3.R
+      desc: Render Figure S3 identity-distribution ridges from the four feature matrices.
+      input: { matrices: $sdt_matrix }
+      output: { pdf: $figS3_pdf }
+    $figS3_pdf: { type: file, path: "results/figures/figure_S3.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE 5  (recombination in the coding region)
+  # ###########################################################################
+  $fig5:
+    type: stage
+    question: Does recombination (not just point mutation) generate diversity, and does it break tree methods?
+    purpose: >-
+      Within each within-genus cluster, build trees from adjacent 500-nt windows
+      and measure topological churn (Robinson-Foulds), and reconstruct
+      recombination tracts with ClonalFrameML.
+    interpretation: >-
+      Neighbouring windows give conflicting topologies (high RF) and ClonalFrameML
+      finds homoplasy tracts — extensive recombination confounds a single clonal tree.
+
+    $cluster_alignment:
+      type: rule
+      tool: mafft --auto
+      desc: Full-length nucleotide alignment for one within-genus cluster.
+      input: { cluster: $cluster_fasta }
+      output: { aln: $cluster_aln }
+    $cluster_aln:
+      { type: file, path: "results/figure_5/anello_80.0_{cluster}.aln.fasta" }
+
+    $cluster_phyml_tree:
+      type: rule
+      tool: phyml_tree.sh
+      desc: "Full-length ML tree for the cluster (PhyML, HKY+G4) — the tree ClonalFrameML re-fits onto."
+      params: { opts: "-b 0 -m HKY85 -f m -t e -v 0 -c 4 -a e -o tlr" }
+      input: { aln: $cluster_aln }
+      output: { tree: $cluster_tree }
+    $cluster_tree:
+      { type: file, path: "results/figure_5/anello_80.0_{cluster}.newick" }
+
+    $cluster_window_trees:
+      type: rule
+      tool: window_trees.sh
+      desc: Cut the cluster alignment into adjacent 500-nt windows and build a PhyML tree per window.
+      params:
+        { window: 500, opts: "-b 0 -m HKY85 -f m -t e -v 0 -c 4 -a e -o tlr" }
+      input: { aln: $cluster_aln }
+      output: { windows: $window_trees }
+    $window_trees: { type: file, path: "results/figure_5/{cluster}_windows" }
+
+    $cluster_rf_profile:
+      type: rule
+      tool: rf_profile.py
+      desc: "Robinson-Foulds distance between adjacent-window trees (ETE3): topology change along the genome."
+      input: { windows: $window_trees }
+      output: { rf: $rf_profile }
+    $rf_profile: { type: file, path: "results/figure_5/{cluster}_rf.tsv" }
+
+    $cluster_clonalframeml:
+      type: rule
+      tool: ClonalFrameML
+      desc: "ClonalFrameML on the cluster (kappa=2.0): reconstruct recombination tracts, re-fit branch lengths."
+      params: { kappa: "2.0" }
+      input: { aln: $cluster_aln, tree: $cluster_tree }
+      output: { labelled: $cfml_labelled, annotated: $cfml_annotated }
+    $cfml_labelled:
+      {
+        type: file,
+        path: "results/figure_5/anello_80.0_{cluster}_CFML.labelled_tree.newick",
+      }
+    $cfml_annotated:
+      {
+        type: file,
+        path: "results/figure_5/anello_80.0_{cluster}_CFML.annotated.tree",
+      }
+
+    $figure_5:
+      type: rule
+      tool: figure_5.py
+      desc: Assemble Figure 5 from the RF profiles and ClonalFrameML reconstructions of all three clusters.
+      input:
+        {
+          rf: $rf_profile,
+          labelled: $cfml_labelled,
+          annotated: $cfml_annotated,
+        }
+      output: { pdf: $fig5_pdf }
+    $fig5_pdf: { type: file, path: "results/figures/figure_5.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE S4  (recombination breakpoints, GARD)
+  # ###########################################################################
+  $figS4:
+    type: stage
+    question: How many recombination breakpoints does each genus's alignment support?
+    purpose: Run GARD per genus and record the AIC-supported breakpoint count.
+    interpretation: >-
+      7-8 breakpoints per genus (Alpha 7, Beta 8, Gamma 7) — independent
+      confirmation of pervasive recombination.
+
+    $gard_breakpoints:
+      type: rule
+      tool: hyphy gard
+      desc: GARD on a genus alignment (Datamonkey/HyPhy engine).
+      input: { alignment: $genus_fasta }
+      output: { result: $gard_json }
+    $gard_json:
+      { type: file, path: "results/figure_S4/{genus}_GARD_result.json" }
+
+    $figure_S4:
+      type: rule
+      tool: figure_S4.py
+      desc: Summarise the three GARD JSONs into Figure S4.
+      input: { gard: $gard_json }
+      output: { pdf: $figS4_pdf }
+    $figS4_pdf: { type: file, path: "results/figures/figure_S4.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — FIGURE S5  (recombination in non-coding sequence)
+  # ###########################################################################
+  $figS5:
+    type: stage
+    question: Does recombination also act on the conserved non-coding region / 5'UTR, or only the coding ORFs?
+    purpose: Repeat the ClonalFrameML reconstruction on the non-coding and 5'UTR alignments.
+    interpretation: >-
+      Recombination tracts appear in non-coding sequence too — a genome-wide
+      feature, not confined to ORF1.
+
+    $noncoding_alignment:
+      type: rule
+      tool: mafft --auto
+      desc: Align one non-coding sequence set.
+      input: { ncset: $noncoding_fasta }
+      output: { aln: $nc_aln }
+    $nc_aln: { type: file, path: "results/figure_S5/{ncset}.aln.fasta" }
+
+    $noncoding_phyml_tree:
+      type: rule
+      tool: phyml_tree.sh
+      desc: "Starting ML tree for the non-coding set (PhyML, HKY+G4)."
+      params: { opts: "-b 0 -m HKY85 -f m -t e -v 0 -c 4 -a e -o tlr" }
+      input: { aln: $nc_aln }
+      output: { tree: $nc_tree }
+    $nc_tree: { type: file, path: "results/figure_S5/{ncset}.newick" }
+
+    $noncoding_clonalframeml:
+      type: rule
+      tool: ClonalFrameML
+      desc: ClonalFrameML on the non-coding set.
+      params: { kappa: "2.0" }
+      input: { aln: $nc_aln, tree: $nc_tree }
+      output: { labelled: $nc_labelled, mutations: $nc_mutations }
+    $nc_labelled:
+      { type: file, path: "results/figure_S5/{ncset}.labelled_tree.newick" }
+    $nc_mutations:
+      { type: file, path: "results/figure_S5/{ncset}.mutations.tsv" }
+
+    $figure_S5:
+      type: rule
+      tool: figure_S5.py
+      desc: Assemble Figure S5 from the non-coding ClonalFrameML reconstructions.
+      input: { trees: $nc_labelled }
+      output: { pdf: $figS5_pdf }
+    $figS5_pdf: { type: file, path: "results/figures/figure_S5.pdf" }
+
+  # ###########################################################################
+  # ANALYSIS — TABLE S1  (dataset / contig statistics)
+  # ###########################################################################
+  $tableS1:
+    type: stage
+    question: What is the assembled dataset — how many contigs, what lengths, how many circular genomes?
+    purpose: Tabulate contig and ORF statistics for the study.
+    interpretation: "1,656 contigs (median 2,916 bp), 190 circular genomes — the scale that makes the diversity claims possible."
+
+    $table_S1:
+      type: rule
+      tool: table_S1.py
+      desc: Compile contig/ORF summary statistics into Table S1.
+      input:
+        {
+          contigs: $nr_contigs,
+          circular: $circular_contigs,
+          orf1: $orf1,
+          genus: $contig_genus,
+        }
+      output: { csv: $tableS1_csv }
+    $tableS1_csv: { type: file, path: "results/tables/table_S1.csv" }
+
+  # ###########################################################################
+  # ANALYSIS — NANOPORE VALIDATION
+  # ###########################################################################
+  $nanopore:
+    type: stage
+    question: Are the short-read assembled contigs real genomes, not assembly chimeras?
+    purpose: Map independent Oxford Nanopore long reads to a subject's contigs to confirm they span end-to-end.
+    interpretation: Long reads span the contigs, ruling out chimeric assembly artifacts.
+
+    $nanopore_filter:
+      type: rule
+      tool: porechop | filtlong
+      desc: QC/trim the raw Nanopore reads with porechop, then filtlong.
+      params: { filtlong: "--min_length 2000 --keep_percent 90" }
+      input: { reads: $nanopore_reads }
+      output: { reads: $nanopore_filt }
+    $nanopore_filt:
+      { type: file, path: "results/nanopore/{sample}.filt.fastq.gz" }
+
+    $nanopore_map:
+      type: rule
+      tool: minimap2 | samtools
+      desc: Map filtered long reads to the sample's own assembled contigs (minimap2, map-ont).
+      params: { preset: map-ont }
+      input: { reads: $nanopore_filt, contigs: $contigs_dust }
+      output: { bam: $nanopore_bam }
+    $nanopore_bam: { type: file, path: "results/nanopore/{sample}.bam" }
+
+    $nanopore_validation_report:
+      type: rule
+      tool: nanopore_validate.py
+      desc: Summarise long-read support per contig into the validation report.
+      input: { bams: $nanopore_bam }
+      output: { report: $validation_report }
+    $validation_report:
+      { type: file, path: "results/nanopore/validation_report.tsv" }
+
+  # ###########################################################################
+  # DEFAULT TARGET  (Snakefile `rule all`)
+  # Every published figure and table this workflow reconstructs.
+  # ###########################################################################
+  # $all:
+  #   type: output
+  #   label: rule all
+  #   desc: The default target — every published figure, table, and the validation report.
+  #   input:
+  #     figure_1: $fig1_pdf
+  #     figure_2AB: $fig2ab_pdf
+  #     figure_2C: $fig2c_pdf
+  #     figure_3: $fig3_pdf
+  #     figure_4: $fig4_pdf
+  #     figure_5: $fig5_pdf
+  #     figure_S1: $figS1_pdf
+  #     figure_S3: $figS3_pdf
+  #     figure_S4: $figS4_pdf
+  #     figure_S5: $figS5_pdf
+  #     table_S1: $tableS1_csv
+  #     table_S4: $tableS4_csv
+  #     table_S5: $tableS5_csv
+  #     validation: $validation_report
