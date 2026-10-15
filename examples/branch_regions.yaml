@@ -1,0 +1,45 @@
+# Automatic regions: `region:` on a relation wraps every branch.
+#
+# `relations: {yes: {region: true}}` gives each `yes:` block that declares
+# something a region of its own, `<owner>.<relation>`, labeled like the box
+# and classed `<relation>` -- so `.region--yes` tints every yes branch at
+# once (branch_regions.css). It is the declared form of writing
+# `yes: {~r: {...}}` inside each block by hand. References to nodes declared
+# elsewhere stay outside (the region is what is *written* under the branch),
+# and an unmarked `region:` inside one block overrides the relation.
+
+title: "branch regions"
+
+diagram:
+  direction: DOWN
+  layerSpacing: 70
+
+relations:
+  yes: {as: answer, region: true}
+  no:  {as: answer, region: {class: fallout}}   # same, with a class of its own
+
+types:
+  question: {badge: "?"}
+  answer:   {css: "border-radius: 999px; padding: 2px 12px; font-weight: 600;"}
+  outcome:  {css: "border-left: 4px solid #64748b;"}
+
+defaults:
+  _root: question
+
+style:
+  skin: branch_regions.css
+
+nodes:
+  $spread:
+    label: any spread?
+    no:
+      $tooeasy: {type: outcome, label: "too easy: no failures"}
+      $toohard: {type: outcome, label: "too hard: no passes"}
+    yes:
+      $ontarget:
+        label: do the failures look like the trap?
+        no:
+          region: false                 # this branch stays unwrapped
+          $offtarget: {type: outcome, label: failing for the wrong reason}
+        yes:
+          $ship: {type: outcome, label: approve}

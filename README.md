@@ -433,6 +433,23 @@ nodes:
       $spread: {label: any spread?}     # beside the region, not in it
 ```
 
+To do that for every block of a relation at once, say so on the relation:
+
+```yaml
+relations:
+  yes: {as: answer, region: true}                      # defaults: label yes, class yes
+  no:  {as: answer, region: {class: fallout, type: stop}}  # or set its fields
+```
+
+Each `yes:` block that *declares* something gets an automatic region,
+`<owner>.<relation>`, labeled like the box (the relation's `label:` or name)
+and classed `<relation>` (so `.region--yes` tints every yes branch). A block
+that only references nodes declared elsewhere makes no region, and a block on a
+nested node makes none either, since regions are top-level. An unmarked
+`region:` inside one block overrides the relation — `yes: {region: false, $x:
+{}}` leaves one branch unwrapped, `no: {region: {label: fallout}, $y: {}}`
+wraps one.
+
 Regions nest: a node joins every enclosing region (an outer backdrop encloses
 the inner), is tagged with the innermost, and takes the innermost `type:` that
 is set. Inside a region, `$` keys are always declarations. Regions stay

@@ -1637,3 +1637,75 @@ def test_region_in_a_relation_block_alone_still_makes_the_box():
         }
     )
     assert ("q", "q.yes") in _edge_set(graph)
+
+
+# --- `region:` on a relation: automatic regions ------------------------------
+
+
+def test_relation_region_wraps_what_each_block_declares():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        graph = parse(
+            {
+                "relations": {
+                    "yes": {"as": "answer", "label": "yes", "region": True},
+                    "no": {"region": {"class": "nope", "type": "stop", "label": ""}},
+                },
+                "nodes": {
+                    "$q": {
+                        "yes": {"$a": {"yes": {"$b": {}}}, "$ref": None},
+                        "no": {"$c": {}, "$d": {"type": "go"}},
+                    },
+                    "$ref": {},
+                    "$r": {"yes": "$ref"},         # references only: no region
+                },
+            }
+        )
+    by_id = {r["id"]: r for r in graph["regions"]}
+    assert set(by_id) == {"q.yes", "a.yes", "q.no"}
+    # Declared nodes and everything under them join; references and the
+    # owner's own box stay outside.
+    assert by_id["q.yes"] == {"id": "q.yes", "label": "yes", "class": "yes", "members": ["a", "a.yes", "b"]}
+    assert by_id["a.yes"]["members"] == ["b"]                      # nested automatic region
+    assert _node(graph, "b")["region"] == "a.yes"
+    assert "q.yes" not in by_id["q.yes"]["members"]                # the box is not a member
+    # A mapping sets the region's fields; `type` is the members' default.
+    assert by_id["q.no"] == {"id": "q.no", "label": "", "class": "nope", "type": "stop", "members": ["c", "d"]}
+    assert _node(graph, "c")["type"] == "stop"
+    assert _node(graph, "d")["type"] == "go"
+    # Edges are unchanged by the region.
+    assert {("q", "q.yes", "yes"), ("q.yes", "a", "yes"), ("q.yes", "ref", "yes"), ("q", "c", "no")} <= _labeled_edges_typed(graph)
+
+
+def test_block_level_region_overrides_the_relation():
+    graph = parse(
+        {
+            "relations": {"yes": {"region": True}, "no": {}},
+            "nodes": {
+                "$q": {
+                    "yes": {"region": False, "$a": {}},                 # off for this owner
+                    "no": {"region": {"label": "fallout"}, "$b": {}},  # on for this owner
+                },
+            },
+        }
+    )
+    assert [(r["id"], r["label"], r["members"]) for r in graph["regions"]] == [("q.no", "fallout", ["b"])]
+    assert "region" not in {k for e in graph["edges"] for k in e}
+
+
+def test_relation_region_skips_nested_owners():
+    graph = parse(
+        {
+            "relations": {"yes": {"region": True}},
+            "nodes": {"$g": {"type": "group", "$q": {"yes": {"$a": {}}}}},
+        }
+    )
+    assert graph.get("regions", []) == []
+    assert _node(graph, "a")["parent"] == "g"
+
+
+def test_relation_region_option_is_validated():
+    with pytest.raises(ValueError, match="'region' takes label/class/type only"):
+        parse({"relations": {"yes": {"region": {"members": []}}}, "nodes": {}})
+    with pytest.raises(ValueError, match="'region' must be true, false, or a mapping"):
+        parse({"relations": {"yes": {"region": "yes"}}, "nodes": {}})

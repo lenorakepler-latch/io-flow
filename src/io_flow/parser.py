@@ -88,7 +88,10 @@ Rules:
   ``type: question`` once; members' children follow the parent-type rules.
   Regions nest (a node joins every enclosing one), and a ``~region`` may sit
   inside a relation block: its members are declared inline there, each
-  connected by that relation -- "the yes branch, as a region".
+  connected by that relation -- "the yes branch, as a region". A relation
+  may declare that for every block at once: ``relations: {yes: {region:
+  true}}`` wraps whatever each ``yes:`` block declares in an automatic
+  region ``<owner>.<relation>``.
 * **Two-pass.** Every node id is collected first, then references are
   resolved, so forward references work regardless of document order.
 * Unresolved ``$refs`` emit a loud ``UnresolvedReferenceWarning`` listing
@@ -218,6 +221,27 @@ class Relations:
         self.label: dict[str, str] = {}
         self.type: dict[str, str] = {}
         self.as_node: dict[str, str] = {}
+        self.region: dict[str, dict[str, Any]] = {}
+
+
+def _region_opt(value: Any, where: str) -> dict[str, Any] | None:
+    """Normalize a ``region:`` option: ``true`` -> ``{}`` (defaults), a mapping
+    of region fields (label/class/type) -> itself, ``false``/``None`` -> None."""
+    if value is None or value is False:
+        return None
+    if value is True:
+        return {}
+    if isinstance(value, dict):
+        bad = [k for k in value if str(k) not in ("label", "class", "type")]
+        if bad:
+            raise ValueError(
+                f"{where}: 'region' takes label/class/type only, got {bad[0]!r}"
+            )
+        return {str(k): v for k, v in value.items()}
+    raise ValueError(
+        f"{where}: 'region' must be true, false, or a mapping of label/class/type, "
+        f"got {value!r}"
+    )
 
 
 def _as_type(value: Any, where: str) -> str | None:
@@ -241,7 +265,7 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
           reads:    {direction: in}
           inherits: {direction: out, anchor: {from: top, to: bottom}}
           yes:      {direction: out, label: yes, type: outcome}
-          no:       {as: answer}
+          no:       {as: answer, region: true}
 
     Each registered name becomes usable on any node exactly like ``calls:``,
     tags its edges with ``type: <name>`` (so ``edge--<name>`` is stylable from
@@ -252,7 +276,9 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
     relation's block -- a ``defaults:`` entry for the parent type still wins,
     as it does over the ``step`` fallback. ``as:`` is ``edge`` (default) or a
     node type: the relation then renders as a *box* of that type between the
-    owner and its targets (see ``record_edges``).
+    owner and its targets (see ``record_edges``). ``region:`` (``true`` or a
+    mapping of label/class/type) wraps everything declared in each of the
+    relation's blocks in an automatic region, ``<owner>.<relation>``.
     """
     rel = Relations()
     for name, spec in (data.get("relations", {}) or {}).items():
@@ -277,6 +303,9 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
         as_type = _as_type(spec.get("as"), f"relations.{name}")
         if as_type is not None:
             rel.as_node[str(name)] = as_type
+        region = _region_opt(spec.get("region"), f"relations.{name}")
+        if region is not None:
+            rel.region[str(name)] = region
     return rel
 
 
@@ -593,7 +622,7 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                 str(k).startswith((SIGIL, REGION_SIGIL))
                 or (isinstance(v, str) and v.startswith(SIGIL))
                 for k, v in block.items()
-                if str(k) not in ("group", "as")
+                if str(k) not in ("group", "as", "region")
             )
             if as_type is not None and has_entries:
                 junction = f"{node_id}.{edge_type}"
@@ -614,68 +643,115 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                 sites.append((node_id, edge_type, junction, "", None, block_group))
                 edge_owner = junction
                 junctions.add(junction)
-            for key, value in block.items():
-                key = str(key)
-                if key == "group" and block_group is not None:
-                    continue  # the block-level group tag, not an edge
-                if key == "as" and not str(value).startswith(SIGIL):
-                    continue  # the block-level render mode, not an edge
-                if key.startswith(REGION_SIGIL):
-                    # A region inside the block: its members are declared
-                    # inline here (each connected by this relation) and the
-                    # region's backdrop wraps them plus everything declared
-                    # under them -- "the yes branch, as a region".
-                    if parent_id is not None:
-                        raise ValueError(
-                            f"{SIGIL}{node_id}.{edge_type}: region {key} would put "
-                            f"its members beside a nested node, but regions are "
-                            f"top-level only (members have no parent)"
-                        )
-                    add_region(
-                        key[len(REGION_SIGIL):],
-                        value,
-                        on_member=lambda nid: sites.append(
-                            (edge_owner, edge_type, nid, None, None, block_group)
-                        ),
-                    )
-                    continue
-                key_ref = key.startswith(SIGIL)
-                value_ref = isinstance(value, str) and value.startswith(SIGIL)
-                if key_ref and value_ref:
+            # `relations: {yes: {region: true}}` wraps everything *declared*
+            # in each `yes:` block in an automatic region `<owner>.<relation>`
+            # (labeled like the box would be, classed `<relation>`), the
+            # declared form of `yes: {~r: {...}}`. References declared
+            # elsewhere are not written here, so they stay outside; a block
+            # that declares nothing makes no region. Regions are top-level
+            # only, so a nested owner's block makes none either. An unmarked
+            # `region:` inside the block overrides the relation's setting.
+            auto_region = relations.region.get(edge_type)
+            if isinstance(block, dict) and "region" in block and not str(block["region"]).startswith(SIGIL):
+                auto_region = _region_opt(block["region"], f"{SIGIL}{node_id}.{edge_type}")
+            declares = any(
+                (str(k).startswith(SIGIL) and isinstance(v, dict)) or str(k).startswith(REGION_SIGIL)
+                for k, v in block.items()
+            )
+            opened: dict[str, Any] | None = None
+            if auto_region is not None and declares and parent_id is None:
+                rid = f"{node_id}.{edge_type}"
+                if rid in region_ids:
+                    raise ValueError(f"duplicate region {REGION_SIGIL}{rid}")
+                opened = {
+                    "id": rid,
+                    "label": str(auto_region.get("label", relations.label.get(edge_type, edge_type))),
+                    "members": [],
+                    "class": str(auto_region.get("class", edge_type)),
+                }
+                if auto_region.get("type") is not None:
+                    opened["type"] = str(auto_region["type"])
+                regions.append(opened)
+                region_ids.add(rid)
+                open_regions.append(opened)
+            try:
+                _record_entries(node_id, edge_type, block, block_group, edge_owner, parent_id, parent_type)
+            finally:
+                if opened is not None:
+                    open_regions.pop()
+
+    def _record_entries(
+        node_id: str,
+        edge_type: str,
+        block: dict[str, Any],
+        block_group: Any,
+        edge_owner: str,
+        parent_id: str | None,
+        parent_type: str | None,
+    ) -> None:
+        """The entries of one relation block (see ``record_edges``)."""
+        for key, value in block.items():
+            key = str(key)
+            if key == "group" and block_group is not None:
+                continue  # the block-level group tag, not an edge
+            if key in ("as", "region") and not str(value).startswith(SIGIL):
+                continue  # block-level options, not edges
+            if key.startswith(REGION_SIGIL):
+                # A region inside the block: its members are declared
+                # inline here (each connected by this relation) and the
+                # region's backdrop wraps them plus everything declared
+                # under them -- "the yes branch, as a region".
+                if parent_id is not None:
                     raise ValueError(
-                        f"{edge_type} entry {key}: {value} on {SIGIL}{node_id}: both "
-                        f"sides are $-marked; exactly one side may be the reference"
+                        f"{SIGIL}{node_id}.{edge_type}: region {key} would put "
+                        f"its members beside a nested node, but regions are "
+                        f"top-level only (members have no parent)"
                     )
-                if key_ref and isinstance(value, dict):
-                    # A mapping value is an *inline declaration*: the node is
-                    # declared right here (an ordinary node spec -- type, data,
-                    # $children, relation blocks of its own) and the edge is
-                    # drawn as for any reference. The new node is the owner's
-                    # sibling: containment already has a spelling (a $child
-                    # directly in the node), so this one means "connected by
-                    # this relation". Nesting relation blocks inside inline
-                    # specs is how a tree-shaped flowchart reads as a tree.
-                    add_node(
-                        _strip(key),
-                        value,
-                        parent_id,
-                        parent_type,
-                        relations.type.get(edge_type, DEFAULT_TYPE),
-                    )
-                    sites.append((edge_owner, edge_type, _strip(key), None, None, block_group))
-                elif key_ref:
-                    # Unmarked value annotates the edge: a string is label
-                    # text ("" = none), a number is a flow weight.
-                    sites.append((edge_owner, edge_type, _strip(key), value, None, block_group))
-                elif value_ref:
-                    # Unmarked key is a name for the connection (arg name).
-                    sites.append((edge_owner, edge_type, _strip(value), None, key, block_group))
-                else:
-                    # Pure literal entry (e.g. a default value); no edge. Pass 2
-                    # warns if either side exactly matches a node id.
-                    literals.append((node_id, edge_type, key))
-                    if isinstance(value, str):
-                        literals.append((node_id, edge_type, value))
+                add_region(
+                    key[len(REGION_SIGIL):],
+                    value,
+                    on_member=lambda nid: sites.append(
+                        (edge_owner, edge_type, nid, None, None, block_group)
+                    ),
+                )
+                continue
+            key_ref = key.startswith(SIGIL)
+            value_ref = isinstance(value, str) and value.startswith(SIGIL)
+            if key_ref and value_ref:
+                raise ValueError(
+                    f"{edge_type} entry {key}: {value} on {SIGIL}{node_id}: both "
+                    f"sides are $-marked; exactly one side may be the reference"
+                )
+            if key_ref and isinstance(value, dict):
+                # A mapping value is an *inline declaration*: the node is
+                # declared right here (an ordinary node spec -- type, data,
+                # $children, relation blocks of its own) and the edge is
+                # drawn as for any reference. The new node is the owner's
+                # sibling: containment already has a spelling (a $child
+                # directly in the node), so this one means "connected by
+                # this relation". Nesting relation blocks inside inline
+                # specs is how a tree-shaped flowchart reads as a tree.
+                add_node(
+                    _strip(key),
+                    value,
+                    parent_id,
+                    parent_type,
+                    relations.type.get(edge_type, DEFAULT_TYPE),
+                )
+                sites.append((edge_owner, edge_type, _strip(key), None, None, block_group))
+            elif key_ref:
+                # Unmarked value annotates the edge: a string is label
+                # text ("" = none), a number is a flow weight.
+                sites.append((edge_owner, edge_type, _strip(key), value, None, block_group))
+            elif value_ref:
+                # Unmarked key is a name for the connection (arg name).
+                sites.append((edge_owner, edge_type, _strip(value), None, key, block_group))
+            else:
+                # Pure literal entry (e.g. a default value); no edge. Pass 2
+                # warns if either side exactly matches a node id.
+                literals.append((node_id, edge_type, key))
+                if isinstance(value, str):
+                    literals.append((node_id, edge_type, value))
 
     def add_node(
         name: str,
