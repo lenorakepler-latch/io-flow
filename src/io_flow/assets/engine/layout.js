@@ -48,10 +48,11 @@ window.IOFlow = window.IOFlow || {};
     return o;
   }
 
-  // Room for the compound header (height owned by --header-h in viewer.css)
+  // Room for the compound header (height owned by --header-h in viewer.css,
+  // plus this compound's measured body band, if its type has a `body:`)
   // + inner padding around nested children.
-  function compoundOptions() {
-    return { "elk.padding": `[top=${IOF.headerH() + 8},left=16,bottom=16,right=16]` };
+  function compoundOptions(el) {
+    return { "elk.padding": `[top=${IOF.headerH(el) + 8},left=16,bottom=16,right=16]` };
   }
 
   // What a compound's header bar needs to show its title. A compound is sized
@@ -65,7 +66,12 @@ window.IOFlow = window.IOFlow || {};
     // Only the overlay kind: a header in normal flow (leaf, or an empty
     // compound sized like one) is already inside the measured box.
     if (!head || getComputedStyle(head).position !== "absolute") return 0;
-    return Math.ceil(head.scrollWidth) + 12; // + the bar's own side padding
+    // The body band (a type's `body:`) also wants its width; it is sized
+    // independently of the compound (see viewer.css), so read it directly.
+    const body = el.querySelector(":scope > .node__body");
+    const bodyW = body && getComputedStyle(body).position === "absolute"
+      ? Math.ceil(body.getBoundingClientRect().width) : 0;
+    return Math.max(Math.ceil(head.scrollWidth) + 12, bodyW); // + the bar's own side padding
   }
   IOF.headerWidth = headerWidth;
 
@@ -166,7 +172,7 @@ window.IOFlow = window.IOFlow || {};
         if (s.w > width) width = s.w;
         return s;
       });
-      let y = IOF.headerH() + 8; // below the header; matches compoundOptions
+      let y = IOF.headerH(domIndex[id]) + 8; // below the header (+ body); matches compoundOptions
       kids.forEach((c, i) => {
         domIndex[c].style.width = width + "px"; // uniform rows
         pos[c] = { x: PAD, y, w: width, h: sizes[i].h };
@@ -189,7 +195,7 @@ window.IOFlow = window.IOFlow || {};
     // reflow into the freed space instead of leaving a gap (collapse.js).
     const isCollapsed = collapsed && collapsed.has(node.id);
     if (children.length && !isCollapsed && !(stackRoots && stackRoots.has(node.id))) {
-      out.layoutOptions = compoundOptions();
+      out.layoutOptions = compoundOptions(domIndex[node.id]);
       // Lay out around a header-wide parent rather than widening it after the
       // fact, so siblings keep their spacing instead of being overlapped.
       const hw = headerWidth(domIndex[node.id]);
@@ -336,9 +342,9 @@ window.IOFlow = window.IOFlow || {};
 
   // Bottom-up: de-overlap each compound's children (deepest first, so a parent
   // separates already-final child boxes), then grow the parent to fit.
-  function declump(node, topPad, gap) {
+  function declump(node, topPad, gap, domIndex) {
     const kids = node.children || [];
-    kids.forEach((k) => declump(k, IOF.headerH() + 8, gap));
+    kids.forEach((k) => declump(k, IOF.headerH(domIndex && domIndex[k.id]) + 8, gap, domIndex));
     if (kids.length > 1) separate(kids, topPad, gap);
     fit(node, gap);
   }
@@ -355,7 +361,7 @@ window.IOFlow = window.IOFlow || {};
     const cfg = graph.diagram || {};
     const DIR = { DOWN: "TB", UP: "BT", RIGHT: "LR", LEFT: "RL" };
     const rankdir = DIR[String(cfg.direction || "RIGHT").toUpperCase()] || "LR";
-    const HEADER = IOF.headerH() + 8;
+    const headerPad = (id) => IOF.headerH(domIndex[id]) + 8; // header bar + body band
 
     const parentOf = {};
     graph.nodes.forEach((n) => { parentOf[n.id] = n.parent == null ? null : n.parent; });
@@ -438,9 +444,9 @@ window.IOFlow = window.IOFlow || {};
         y = a.y + shiftY;
       } else {
         x = a.x - absTL[p].x;
-        y = a.y - absTL[p].y + HEADER; // clear the compound header overlay
+        y = a.y - absTL[p].y + headerPad(p); // clear the compound header overlay
       }
-      if (isCompound[n.id]) h += HEADER; // grow the box to hold the shifted children
+      if (isCompound[n.id]) h += headerPad(n.id); // grow the box to hold the shifted children
       pos[n.id] = { x, y, w: a.w, h };
     });
     if (stacks) Object.assign(pos, stacks.pos);
@@ -488,7 +494,7 @@ window.IOFlow = window.IOFlow || {};
     // Makes force/stress usable (they don't keep compound boxes apart).
     if ((graph.diagram || {}).deoverlap) {
       const gap = Number((graph.diagram || {}).spacing) || 16;
-      declump(laid, 16, gap);
+      declump(laid, 16, gap, domIndex);
     }
 
     const pos = {};

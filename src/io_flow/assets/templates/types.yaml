@@ -27,6 +27,9 @@
 #   badge:    the pill beside the title         (omit for no badge)
 #   meta:     dimmer lines under the title; a line rendering blank is dropped,
 #             which is how "show `cli` only if there is one" works
+#   body:     longer text below the header (`body: "{{ data.description }}"`);
+#             blank renders no element. A leaf grows to fit it; a compound
+#             lays its children out below it
 #   blocks:   {name: jinja} replacing a base's block outright ({{ super() }} works)
 #   template: a whole template written inline here -- it owns the wrapper
 #             element like a file does, and may {% extends "node.html" %}

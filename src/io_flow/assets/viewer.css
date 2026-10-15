@@ -209,7 +209,22 @@ body {
 .node__meta {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.node--group > .node__header .node__meta,
+.node--class > .node__header .node__meta {
   white-space: nowrap;
+}
+.node--empty > .node__header .node__meta {
+  white-space: normal;
+}
+/* A type's `body:` -- longer text below the header. In normal flow on a
+ * leaf, so the node grows to fit (and wraps at its max-width). */
+.node__body {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .node__meta code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -322,6 +337,28 @@ body {
   position: absolute;
   inset: 0; /* origin == class node origin, matching ELK child coords */
 }
+/* A compound's body is a band under the header bar; children are laid out
+ * below it (the engine adds its measured height to the header reserve, see
+ * IOF.headerH). Measured before the compound has a width -- everything inside
+ * a compound is absolute, so it shrink-wraps to nothing -- hence the
+ * min-width, which keeps the wrap (and so the height) stable; max-width keeps
+ * it inside a compound that is wider. Collapse folds to the bar alone. */
+.node--group > .node__body,
+.node--class > .node__body {
+  position: absolute;
+  top: var(--header-h);
+  left: 0;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 240px;
+  max-width: 100%;
+  margin: 0;
+  padding: 6px 10px 2px;
+  z-index: 1;
+}
+.node--collapsed > .node__body {
+  display: none;
+}
 
 /* Class-layout mode (diagram: classLayout:): the engine adds .node--stacked
  * to stacked compounds and positions members as uniform-width rows in
@@ -349,6 +386,12 @@ body {
   height: auto; /* release the fixed --header-h; size to text like a leaf */
   border-bottom: none;
   border-radius: 8px;
+}
+.node--empty > .node__body {
+  position: static;
+  width: auto;
+  min-width: 0;
+  padding: 0 10px 8px;
 }
 
 /* ---- Anchor-edit handles (select a node to show them) ----------------------- */

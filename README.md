@@ -608,11 +608,15 @@ write is markup; `{{ values }}` are escaped.
 | `title` | the name line (default `{{ label }}`) |
 | `badge` | the pill beside the title; omit for none |
 | `meta` | dimmer lines under the title — **a line that renders blank is dropped**, which is how "show `cli` only if there is one" stays a one-liner |
+| `body` | longer text below the header, in its own `.node__body` element — `body: "{{ data.description }}"` puts each node's description on the canvas. Blank renders no element. A leaf grows to fit it; a compound lays its children out below it (the engine measures the band) |
 | `blocks` | `{name: jinja}` replacing a block of the inherited template outright — reaches what the fields above don't cover, and `{{ super() }}` appends instead of replacing |
 | `template` | a whole template written inline in the YAML — it owns the wrapper element, exactly like a file, and may itself `{% extends "node.html" %}` |
 | `sidebar` | inline Jinja for the detail panel, instead of the generic data dump |
 
-`title`/`badge`/`meta` are also the names of blocks in `node.html.j2`, which is
+Titles, meta lines and bodies all wrap inside the node (at its max-width);
+only a compound's header bar, which is a fixed-height strip, stays on one line.
+
+`title`/`badge`/`meta`/`body` are also the names of blocks in `node.html.j2`, which is
 the one thing here worth reading twice. **The field is the value; the block is
 the markup around it.** A declaration's `title:` fills a variable the template
 draws as `<div class="node__title">…</div>`; `blocks: {title: …}` replaces that

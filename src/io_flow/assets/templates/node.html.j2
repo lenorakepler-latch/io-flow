@@ -6,7 +6,10 @@
    `node--<type>`, then every type it extends and anything its `class:` added.
 
    Blocks: 
-      - `header` (wrapping `title`/`badge`/`meta`), `title`, `badge`, `meta`, `children`. 
+      - `header` (wrapping `title`/`badge`/`meta`), `title`, `badge`, `meta`, `body`, `children`. 
+      `body` is a type's `body:` -- longer text below the header (a description). On a
+      leaf it is in normal flow; on a compound it is a band under the header bar that
+      children are laid out below (the engine measures it: IOF.headerH(el)).
       Override them from a declaration (`blocks: {meta: '...'}`) or from a `templates/<type>.html.j2` file that extends this.
 
    The `-` markers keep this readable here and tight in the artifact: every node carries its rendered HTML, so stray indentation would ship per node. #}
@@ -26,5 +29,6 @@
       {%- endblock -%}
    {%- endblock -%}
    </div>
+   {%- block body %}{% if body %}<div class="node__body">{{ body }}</div>{% endif %}{% endblock -%}
    {%- block children %}{% endblock -%}
 </div>

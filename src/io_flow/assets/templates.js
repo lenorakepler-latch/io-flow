@@ -28,14 +28,26 @@ window.IOFlow = window.IOFlow || {};
 
   // Compound-header height. Single source of truth is the --header-h CSS
   // variable in viewer.css; layout padding, drag clamping, and collapse all
-  // read it from here.
+  // read it from here. With a node element, the measured height of that
+  // node's `.node__body` (a type's `body:` -- a description, say) is added:
+  // the body sits in the compound's top band below the header bar, so the
+  // space children must clear is header + body. Without an element it is
+  // the bare bar -- what a collapsed compound folds to (the body hides).
   let _headerH = null;
-  IOF.headerH = () => {
+  IOF.headerH = (el) => {
     if (_headerH == null) {
       const v = getComputedStyle(document.documentElement).getPropertyValue("--header-h");
       _headerH = parseInt(v, 10) || 32;
     }
-    return _headerH;
+    return _headerH + (el ? IOF.bodyH(el) : 0);
+  };
+  // Height of a compound's body band, 0 when it has none. Only the overlay
+  // kind counts: a body in normal flow (a leaf, or an empty compound sized
+  // like one) is already inside the node's measured box.
+  IOF.bodyH = (el) => {
+    const body = el && el.querySelector && el.querySelector(":scope > .node__body");
+    if (!body || getComputedStyle(body).position !== "absolute") return 0;
+    return Math.ceil(body.getBoundingClientRect().height);
   };
 
   // Display name: `label` (set by the parser, defaults to the node id — methods

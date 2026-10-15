@@ -170,7 +170,7 @@ window.IOFlow = window.IOFlow || {};
     if (pid != null && state.pos[pid]) {
       const pp = state.pos[pid];
       nx = Math.max(PAD, Math.min(nx, pp.w - p.w - PAD));
-      ny = Math.max(IOF.headerH() + 2, Math.min(ny, pp.h - p.h - PAD));
+      ny = Math.max(IOF.headerH(state.nodeEls[pid]) + 2, Math.min(ny, pp.h - p.h - PAD));
     }
 
     p.x = nx;

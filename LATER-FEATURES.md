@@ -85,21 +85,35 @@ once — the parent width is only final once every child is placed at its measur
 size. Applies on both fresh layout and restore (both route through
 `applyPositions`).
 
-## Known limitation (why `description` is not rendered on-canvas yet)
+### `body:` — on-canvas description (resolved the "known limitation" below)
+
+A type field `body:` (Jinja, like `title:`) renders a `.node__body` element
+below the header. On a leaf it is in normal flow, so the node grows to fit. On
+a compound it is a band under the header bar, and the engine lays children out
+below it: `IOF.headerH(el)` returns the bar height plus that node's measured
+body height, and every place that reserved header room (ELK padding, stacked
+rows, de-overlap, dagre, drag/keyboard clamps, resize minimum) passes the
+compound's element. Collapse still folds to the bare bar (the body hides).
+The body is measured before the compound has a width (everything inside a
+compound is absolute), so it has a `min-width` that keeps its wrap stable and a
+`max-width: 100%` so it stays inside a compound that is wider; `headerWidth`
+floors the compound at the body's width. This is direction B below, done.
+
+## Known limitation, historical (why `description` was not rendered on-canvas)
 
 Turning a data field into a synthetic child **promotes a leaf into a compound**.
 A `file` (or any childless node) that gains a `desc` child now renders through
 `group.html` with a header + children mount — visually wrong for a leaf.
 
-So for now, `description` is left as a plain field and shown in the **sidebar**
-(the default field dump in `_sidebar.html.j2`). The `descriptors:` and
-`fillWidth:` features remain in the codebase, dormant, for cases where a field
-genuinely should be its own box on a node that is already a compound.
+That was why `description` stayed in the **sidebar**. `body:` above is the
+answer; `descriptors:` and `fillWidth:` remain in the codebase, dormant, for a
+field that genuinely should be its own box on a node that is already a
+compound.
 
 ## What comes next
 
-The real unlock is decoupling "content above the children" from "being a child
-node." Two candidate directions:
+The real unlock was decoupling "content above the children" from "being a child
+node." Two candidate directions were considered; B is what shipped as `body:`:
 
 ### A. Per-node measured header height (replaces the global `--header-h`)
 

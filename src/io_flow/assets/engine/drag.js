@@ -54,7 +54,7 @@ window.IOFlow = window.IOFlow || {};
         const ch = state.pos[id].h;
         nx = Math.max(PAD, Math.min(nx, pp.w - cw - PAD));
         // Keep children below the compound header overlay (--header-h).
-        ny = Math.max(IOF.headerH() + 2, Math.min(ny, pp.h - ch - PAD));
+        ny = Math.max(IOF.headerH(state.nodeEls[pid]) + 2, Math.min(ny, pp.h - ch - PAD));
       }
 
       state.pos[id].x = nx;

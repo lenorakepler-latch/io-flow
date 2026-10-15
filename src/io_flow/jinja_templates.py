@@ -340,16 +340,20 @@ def prerender(
     parents = {n.get("parent") for n in graph["nodes"] if n.get("parent") is not None}
 
     def slots_for(spec: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
-        """A declaration's rendered ``title``/``badge``/``meta``.
+        """A declaration's rendered ``title``/``badge``/``body``/``meta``.
 
         Passed to the bases, and to a type's own template file too, so a file
         extending a base inherits what its declaration already said and
         overrides only the block it cares about.
         """
         slots: dict[str, Any] = {}
-        for slot in ("title", "badge"):
+        # `body` renders blank -> no element at all, so `body: "{{ data.description }}"`
+        # is safe on a type whose nodes don't all carry one.
+        for slot in ("title", "badge", "body"):
             if spec.get(slot):
-                slots[slot] = Markup(render_source(spec[slot], node, slot).strip())
+                rendered = render_source(spec[slot], node, slot).strip()
+                if rendered:
+                    slots[slot] = Markup(rendered)
         # A meta line that renders blank is dropped -- that is how "show `cli`
         # only when there is one" stays a one-liner instead of a conditional.
         lines = [render_source(m, node, "meta").strip() for m in spec.get("meta") or []]

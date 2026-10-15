@@ -39,7 +39,7 @@ window.IOFlow = window.IOFlow || {};
       mx = Math.max(mx, p.x + p.w);
       my = Math.max(my, p.y + p.h);
     });
-    return { w: Math.max(mx + PAD, MIN_W), h: Math.max(my + PAD, IOF.headerH() + PAD) };
+    return { w: Math.max(mx + PAD, MIN_W), h: Math.max(my + PAD, IOF.headerH(state.nodeEls[id]) + PAD) };
   }
 
   function onDown(state, id, el, handle, e) {

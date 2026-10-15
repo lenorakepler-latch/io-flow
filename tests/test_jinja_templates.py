@@ -568,3 +568,21 @@ def test_yaml_style_templates_dir_and_live_reload(tmp_path):
         assert "v2" in srv.html
     finally:
         srv.httpd.server_close()
+
+
+def test_body_field_renders_below_the_header_and_blank_is_dropped(tmp_path):
+    """`body:` is longer text below the header -- a real body element, not a
+    meta line -- and a body that renders blank emits no element at all."""
+    g = _graph("question", "question2")
+    g["nodes"][0]["data"] = {"description": "Look at the pass/fail split."}
+    g["nodes"][1]["type"] = "question"
+    d = tmp_path / "templates"
+    d.mkdir()
+    (d / "types.yaml").write_text("question: {badge: '?', body: '{{ data.description }}'}\n")
+    nodes = _embedded(emit.build_html(g, templates=d))
+    html = nodes["question"]["html"]
+    assert '<div class="node__body">Look at the pass/fail split.</div>' in html
+    assert html.index("node__header") < html.index("node__body")
+    # The header closes before the body opens: body is a sibling, not meta.
+    assert html.index("</div>", html.index("node__header")) < html.index("node__body")
+    assert "node__body" not in nodes["question2"]["html"]
