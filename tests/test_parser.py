@@ -183,6 +183,33 @@ def test_region_members_stay_top_level_and_are_recorded():
     }
 
 
+def test_region_type_is_the_default_for_everything_declared_under_it():
+    graph = parse(
+        {
+            "defaults": {"_root": "plain", "question": "note"},
+            "relations": {"yes": {}},
+            "nodes": {
+                "~triage": {
+                    "type": "question",
+                    "$q1": {"yes": {"$q2": {"yes": {"$done": {"type": "go"}}}}},
+                    "$q3": {"$note": {}},
+                },
+                "$outside": {},
+            },
+        }
+    )
+    assert _node(graph, "q1")["type"] == "question"      # member
+    assert _node(graph, "q2")["type"] == "question"      # inline, under a member
+    assert _node(graph, "done")["type"] == "go"          # explicit wins
+    assert _node(graph, "note")["type"] == "note"        # a child: parent-type rules
+    assert _node(graph, "outside")["type"] == "plain"    # `_root` default, outside
+    (region,) = graph["regions"]
+    assert region["type"] == "question"
+    assert "data" not in region                          # reserved, not free data
+    # Only the members are tagged with the region, as before.
+    assert _node(graph, "q2").get("region") is None
+
+
 def test_region_nested_in_a_node_is_an_error():
     """Regions are top-level only (MVP): a `~` inside a node is rejected."""
     with pytest.raises(ValueError, match="region"):

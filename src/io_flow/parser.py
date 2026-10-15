@@ -79,6 +79,13 @@ Rules:
   ones default to ``step``. Reordering renumbers -- that is the trade.
   ``autoedges:`` beside the list chains each step to the next (``true`` types
   them ``next``; a string names the type).
+* **``~region`` groups without containing.** Its ``$``-members stay top-level
+  (``parent`` None) and are tagged ``region``; the viewer draws a backdrop
+  around wherever they land. A region's ``type:`` is the ``_root`` default
+  for every untyped top-level node declared under it -- members and nodes
+  declared inline in their relation blocks alike -- so a region of questions
+  says ``type: question`` once. Members' children follow the parent-type
+  rules as usual.
 * **Two-pass.** Every node id is collected first, then references are
   resolved, so forward references work regardless of document order.
 * Unresolved ``$refs`` emit a loud ``UnresolvedReferenceWarning`` listing
@@ -480,7 +487,15 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         value = fields.get("childtype")
         return str(value) if value is not None else None
 
+    # A region's `type:` is the `_root` default for everything declared under
+    # it (set around add_region's member walk, so inline declarations in
+    # members' relation blocks are covered too; members' children follow the
+    # usual parent-type rules).
+    region_root_type: list[str | None] = [None]
+
     def default_type(parent_type: str | None, fallback: str = DEFAULT_TYPE) -> str:
+        if parent_type is None and region_root_type[0] is not None:
+            return region_root_type[0]
         key = parent_type if parent_type is not None else "_root"
         if key in defaults:
             return str(defaults[key])
@@ -771,7 +786,8 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         """A `~id` block: declare its `$`-members as ordinary top-level nodes
         (parent stays None -- no containment) and record the region so the
         viewer can draw a backdrop around them. Non-`$` keys are region data
-        (label, class, ...)."""
+        (label, class, ...); `type:` is the default type for every untyped
+        top-level node declared under the region."""
         if not rid:
             raise ValueError(f"invalid region name {REGION_SIGIL!r}: must be non-empty")
         if not isinstance(spec, dict):
@@ -787,15 +803,20 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                 f"(nest {SIGIL}node declarations under it)"
             )
         members: list[str] = []
-        for mkey, mspec in member_items:
-            idx = len(nodes)
-            add_node(_strip(str(mkey)), mspec, None, None)  # top-level: no containment
-            nodes[idx]["region"] = rid  # tag only the member itself, not its subtree
-            members.append(nodes[idx]["id"])
+        region_type = str(spec["type"]) if spec.get("type") is not None else None
+        region_root_type[0] = region_type
+        try:
+            for mkey, mspec in member_items:
+                idx = len(nodes)
+                add_node(_strip(str(mkey)), mspec, None, None)  # top-level: no containment
+                nodes[idx]["region"] = rid  # tag only the member itself, not its subtree
+                members.append(nodes[idx]["id"])
+        finally:
+            region_root_type[0] = None
         region_data = {
             str(k): v
             for k, v in spec.items()
-            if not str(k).startswith(SIGIL) and str(k) not in ("label", "class")
+            if not str(k).startswith(SIGIL) and str(k) not in ("label", "class", "type")
         }
         region: dict[str, Any] = {
             "id": rid,
@@ -804,6 +825,8 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         }
         if spec.get("class") is not None:
             region["class"] = str(spec["class"])
+        if region_type is not None:
+            region["type"] = region_type
         if region_data:
             region["data"] = _plain(region_data)
         regions.append(region)

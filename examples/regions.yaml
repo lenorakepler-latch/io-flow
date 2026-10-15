@@ -27,17 +27,19 @@ nodes:
   ~ingest:
     label: Ingest
     class: ingest
-    $fetch: { type: rule, tool: fetch.sh, output: { data: $raw } }
-    $raw: { type: file, label: raw.csv }
-    $parse: { type: rule, tool: parse.py, input: { data: $raw }, output: { rows: $rows } }
+    type: rule # default type for every untyped node declared under this region
+    $fetch: { tool: fetch.sh, output: { data: $raw } }
+    $raw: { type: file, label: raw.csv } # an explicit type still wins
+    $parse: { tool: parse.py, input: { data: $raw }, output: { rows: $rows } }
 
   $rows: { type: file, label: rows.parquet } # hub artifact, in no region
 
   ~analyze:
     label: Analyze
     class: analyze
-    $stats: { type: rule, tool: stats.py, input: { rows: $rows }, output: { summary: $summary } }
-    $plot: { type: rule, tool: plot.py, input: { rows: $rows }, output: { fig: $fig } }
+    type: rule
+    $stats: { tool: stats.py, input: { rows: $rows }, output: { summary: $summary } }
+    $plot: { tool: plot.py, input: { rows: $rows }, output: { fig: $fig } }
 
   $summary: { type: file, label: summary.json }
   $fig: { type: file, label: fig.png }

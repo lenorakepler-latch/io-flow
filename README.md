@@ -394,6 +394,24 @@ types:
   dir: {extends: group, childtype: dir}   # a dir's untyped children are dirs
 ```
 
+**Regions.** A `~region` groups nodes *visually* without containing them: its
+`$`-members stay top-level, so the layout places them by their real
+connectivity, and the region is drawn afterwards as a backdrop around wherever
+they landed. Non-`$` keys are the region's `label:`, `class:` (a
+`.region--<class>` on the backdrop), and free data. A `type:` on the region is
+the default type for every untyped top-level node declared under it — members
+and nodes declared inline in their relation blocks alike — so a region of
+questions says it once (see [`examples/regions.yaml`](examples/regions.yaml)):
+
+```yaml
+nodes:
+  ~triage:
+    label: Triage
+    type: question                      # every untyped node under here
+    $spread: {label: any spread?, yes: {$hasspread: {label: some of each}}}
+    $done:   {type: stop}               # an explicit type still wins
+```
+
 **Ordered children.** A pipeline's stages are a list, not eight nodes that each
 need a name. `steps:` says so: position *is* identity, so the id is the parent's
 plus the index and the index arrives as `number` in the node's data.
