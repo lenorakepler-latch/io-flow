@@ -398,10 +398,12 @@ types:
 `$`-members stay top-level, so the layout places them by their real
 connectivity, and the region is drawn afterwards as a backdrop around wherever
 they landed. Non-`$` keys are the region's `label:`, `class:` (a
-`.region--<class>` on the backdrop), and free data. A `type:` on the region is
-the default type for every untyped top-level node declared under it — members
-and nodes declared inline in their relation blocks alike — so a region of
-questions says it once (see [`examples/regions.yaml`](examples/regions.yaml)):
+`.region--<class>` on the backdrop), and free data. Every top-level node
+*declared under* the region joins it — members and nodes declared inline in
+their relation blocks alike — so the backdrop encloses the whole branch written
+there. A `type:` on the region is the default type for those same nodes, so a
+region of questions says it once (see
+[`examples/regions.yaml`](examples/regions.yaml)):
 
 ```yaml
 nodes:
@@ -411,6 +413,31 @@ nodes:
     $spread: {label: any spread?, yes: {$hasspread: {label: some of each}}}
     $done:   {type: stop}               # an explicit type still wins
 ```
+
+A `~region` may also sit *inside a relation block*. Its members are declared
+inline there, each connected by that relation (through the box, if the relation
+renders as one), and the backdrop wraps the members plus everything declared
+under them — "the yes branch, as a region":
+
+```yaml
+nodes:
+  $fpfn:
+    label: any false positive or false negative results?
+    yes:
+      ~grading:
+        label: grading problems
+        type: question
+        $graderchange: {label: is the grader passing answers it shouldn't?}
+        $gtchange:     {label: is our answer wrong?}
+    no:
+      $spread: {label: any spread?}     # beside the region, not in it
+```
+
+Regions nest: a node joins every enclosing region (an outer backdrop encloses
+the inner), is tagged with the innermost, and takes the innermost `type:` that
+is set. Inside a region, `$` keys are always declarations. Regions stay
+top-level — a `~` inside a node, or in a relation block of a node that has a
+parent, is an error.
 
 **Ordered children.** A pipeline's stages are a list, not eight nodes that each
 need a name. `steps:` says so: position *is* identity, so the id is the parent's

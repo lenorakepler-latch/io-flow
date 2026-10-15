@@ -80,12 +80,15 @@ Rules:
   ``autoedges:`` beside the list chains each step to the next (``true`` types
   them ``next``; a string names the type).
 * **``~region`` groups without containing.** Its ``$``-members stay top-level
-  (``parent`` None) and are tagged ``region``; the viewer draws a backdrop
-  around wherever they land. A region's ``type:`` is the ``_root`` default
-  for every untyped top-level node declared under it -- members and nodes
-  declared inline in their relation blocks alike -- so a region of questions
-  says ``type: question`` once. Members' children follow the parent-type
-  rules as usual.
+  (``parent`` None); the viewer draws a backdrop around wherever they land.
+  Every top-level node *declared under* the region joins it -- members and
+  nodes declared inline in their relation blocks alike -- so the backdrop
+  encloses the whole branch written there. A region's ``type:`` is the
+  ``_root`` default for those same nodes, so a region of questions says
+  ``type: question`` once; members' children follow the parent-type rules.
+  Regions nest (a node joins every enclosing one), and a ``~region`` may sit
+  inside a relation block: its members are declared inline there, each
+  connected by that relation -- "the yes branch, as a region".
 * **Two-pass.** Every node id is collected first, then references are
   resolved, so forward references work regardless of document order.
 * Unresolved ``$refs`` emit a loud ``UnresolvedReferenceWarning`` listing
@@ -487,15 +490,22 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         value = fields.get("childtype")
         return str(value) if value is not None else None
 
-    # A region's `type:` is the `_root` default for everything declared under
-    # it (set around add_region's member walk, so inline declarations in
-    # members' relation blocks are covered too; members' children follow the
-    # usual parent-type rules).
-    region_root_type: list[str | None] = [None]
+    # Regions open around their member walk (a stack: a region may be declared
+    # inside a relation block of a node that is itself in a region). Every
+    # top-level node declared while a region is open -- a member, or a node
+    # declared inline in a member's relation block -- joins every open region,
+    # so the backdrop encloses the whole branch written under it. A region's
+    # `type:` is the `_root` default for those same nodes (innermost wins);
+    # members' children follow the usual parent-type rules.
+    regions: list[dict[str, Any]] = []
+    region_ids: set[str] = set()
+    open_regions: list[dict[str, Any]] = []
 
     def default_type(parent_type: str | None, fallback: str = DEFAULT_TYPE) -> str:
-        if parent_type is None and region_root_type[0] is not None:
-            return region_root_type[0]
+        if parent_type is None:
+            for region in reversed(open_regions):
+                if region.get("type") is not None:
+                    return str(region["type"])
         key = parent_type if parent_type is not None else "_root"
         if key in defaults:
             return str(defaults[key])
@@ -580,7 +590,8 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                 as_type = _as_type(block["as"], f"{SIGIL}{node_id}.{edge_type}")
             edge_owner = node_id
             has_entries = any(
-                str(k).startswith(SIGIL) or (isinstance(v, str) and v.startswith(SIGIL))
+                str(k).startswith((SIGIL, REGION_SIGIL))
+                or (isinstance(v, str) and v.startswith(SIGIL))
                 for k, v in block.items()
                 if str(k) not in ("group", "as")
             )
@@ -609,6 +620,25 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                     continue  # the block-level group tag, not an edge
                 if key == "as" and not str(value).startswith(SIGIL):
                     continue  # the block-level render mode, not an edge
+                if key.startswith(REGION_SIGIL):
+                    # A region inside the block: its members are declared
+                    # inline here (each connected by this relation) and the
+                    # region's backdrop wraps them plus everything declared
+                    # under them -- "the yes branch, as a region".
+                    if parent_id is not None:
+                        raise ValueError(
+                            f"{SIGIL}{node_id}.{edge_type}: region {key} would put "
+                            f"its members beside a nested node, but regions are "
+                            f"top-level only (members have no parent)"
+                        )
+                    add_region(
+                        key[len(REGION_SIGIL):],
+                        value,
+                        on_member=lambda nid: sites.append(
+                            (edge_owner, edge_type, nid, None, None, block_group)
+                        ),
+                    )
+                    continue
                 key_ref = key.startswith(SIGIL)
                 value_ref = isinstance(value, str) and value.startswith(SIGIL)
                 if key_ref and value_ref:
@@ -646,9 +676,6 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                     literals.append((node_id, edge_type, key))
                     if isinstance(value, str):
                         literals.append((node_id, edge_type, value))
-
-    regions: list[dict[str, Any]] = []
-    region_ids: set[str] = set()
 
     def add_node(
         name: str,
@@ -705,17 +732,22 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
             for k, v in spec.items()
             if not str(k).startswith(SIGIL) and k not in ("edges", "steps", "autoedges")
         }
-        nodes.append(
-            {
-                "id": node_id,
-                "type": node_type,
-                "parent": parent_id,
-                # label defaults to the name; the name stays the unique,
-                # addressable key.
-                "label": label if label is not None else name,
-                "data": _plain(node_data),
-            }
-        )
+        node: dict[str, Any] = {
+            "id": node_id,
+            "type": node_type,
+            "parent": parent_id,
+            # label defaults to the name; the name stays the unique,
+            # addressable key.
+            "label": label if label is not None else name,
+            "data": _plain(node_data),
+        }
+        if parent_id is None and open_regions:
+            # Top-level and written under a region: a member of every open
+            # one (backdrops nest), tagged with the innermost.
+            for region in open_regions:
+                region["members"].append(node_id)
+            node["region"] = open_regions[-1]["id"]
+        nodes.append(node)
         # `src:` names a file whose text is embedded for a viewer panel to show.
         src = node_data.get("src")
         if base_dir is not None and isinstance(src, str):
@@ -782,46 +814,40 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         for child_key, child_spec in children.items():
             add_node(_strip(str(child_key)), child_spec, node_id, node_type)
 
-    def add_region(rid: str, spec: Any) -> None:
+    def add_region(rid: str, spec: Any, on_member: Any = None) -> None:
         """A `~id` block: declare its `$`-members as ordinary top-level nodes
         (parent stays None -- no containment) and record the region so the
         viewer can draw a backdrop around them. Non-`$` keys are region data
         (label, class, ...); `type:` is the default type for every untyped
-        top-level node declared under the region."""
+        top-level node declared under the region. A `~` key inside is a nested
+        region (its members belong to both). `on_member` is called with each
+        direct member's id -- how a region inside a relation block connects
+        its members to the owner."""
         if not rid:
             raise ValueError(f"invalid region name {REGION_SIGIL!r}: must be non-empty")
         if not isinstance(spec, dict):
             raise ValueError(f"region {REGION_SIGIL}{rid}: spec must be a mapping, got {spec!r}")
         if rid in region_ids:
             raise ValueError(f"duplicate region {REGION_SIGIL}{rid}")
-        if any(str(k).startswith(REGION_SIGIL) for k in spec):
-            raise ValueError(f"region {REGION_SIGIL}{rid}: regions cannot nest (MVP)")
-        member_items = [(k, v) for k, v in spec.items() if str(k).startswith(SIGIL)]
+        member_items = [
+            (k, v) for k, v in spec.items() if str(k).startswith((SIGIL, REGION_SIGIL))
+        ]
         if not member_items:
             raise ValueError(
                 f"region {REGION_SIGIL}{rid}: has no members "
                 f"(nest {SIGIL}node declarations under it)"
             )
-        members: list[str] = []
         region_type = str(spec["type"]) if spec.get("type") is not None else None
-        region_root_type[0] = region_type
-        try:
-            for mkey, mspec in member_items:
-                idx = len(nodes)
-                add_node(_strip(str(mkey)), mspec, None, None)  # top-level: no containment
-                nodes[idx]["region"] = rid  # tag only the member itself, not its subtree
-                members.append(nodes[idx]["id"])
-        finally:
-            region_root_type[0] = None
         region_data = {
             str(k): v
             for k, v in spec.items()
-            if not str(k).startswith(SIGIL) and str(k) not in ("label", "class", "type")
+            if not str(k).startswith((SIGIL, REGION_SIGIL))
+            and str(k) not in ("label", "class", "type")
         }
         region: dict[str, Any] = {
             "id": rid,
             "label": str(spec.get("label") if spec.get("label") is not None else rid),
-            "members": members,
+            "members": [],
         }
         if spec.get("class") is not None:
             region["class"] = str(spec["class"])
@@ -829,8 +855,22 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
             region["type"] = region_type
         if region_data:
             region["data"] = _plain(region_data)
+        # Record before walking members so an outer backdrop is drawn first
+        # (and so nested regions land on top of it).
         regions.append(region)
         region_ids.add(rid)
+        open_regions.append(region)
+        try:
+            for mkey, mspec in member_items:
+                mkey = str(mkey)
+                if mkey.startswith(REGION_SIGIL):
+                    add_region(mkey[len(REGION_SIGIL):], mspec, on_member)
+                    continue
+                add_node(_strip(mkey), mspec, None, None)  # top-level: no containment
+                if on_member is not None:
+                    on_member(_strip(mkey))
+        finally:
+            open_regions.pop()
 
     for key, spec in (data.get("nodes", {}) or {}).items():
         key = str(key)

@@ -206,8 +206,12 @@ def test_region_type_is_the_default_for_everything_declared_under_it():
     (region,) = graph["regions"]
     assert region["type"] == "question"
     assert "data" not in region                          # reserved, not free data
-    # Only the members are tagged with the region, as before.
-    assert _node(graph, "q2").get("region") is None
+    # Everything top-level declared under the region joins it: the inline
+    # $q2 and $done too (the backdrop encloses the branch), but not the
+    # child $note, which sits inside $q3's box already.
+    assert region["members"] == ["q1", "q2", "done", "q3"]
+    assert _node(graph, "q2")["region"] == "triage"
+    assert _node(graph, "note").get("region") is None
 
 
 def test_region_nested_in_a_node_is_an_error():
@@ -1539,3 +1543,97 @@ def test_relation_list_form_holds_references_only():
         parse({"nodes": {"$q": {"calls": ["$a", "plain"]}, "$a": {}}})
     with pytest.raises(ValueError, match="must be a mapping"):
         parse({"nodes": {"$q": {"calls": 3}}})
+
+
+# --- Regions inside relation blocks, nested regions ---------------------------
+
+
+def test_region_inside_a_relation_block_declares_and_connects_its_members():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        graph = parse(
+            {
+                "relations": {"yes": {"as": "answer"}, "no": {}},
+                "nodes": {
+                    "$q": {
+                        "yes": {
+                            "~grading": {
+                                "label": "grading problems",
+                                "type": "question",
+                                "$grader": {"yes": {"$fix": {"type": "go"}}},
+                                "$answer": {},
+                            }
+                        },
+                        "no": {"~spread": {"$s": {}}, "$other": {}},
+                    }
+                },
+            }
+        )
+    by_id = {r["id"]: r for r in graph["regions"]}
+    # Members are declared inline (top-level) and each is connected by the
+    # relation -- through the box when the relation renders as one.
+    assert _node(graph, "grader")["parent"] is None
+    assert {
+        ("q", "q.yes", "yes"),
+        ("q.yes", "grader", "yes"),
+        ("q.yes", "answer", "yes"),
+        ("grader", "grader.yes", "yes"),
+        ("grader.yes", "fix", "yes"),
+        ("q", "s", "no"),
+        ("q", "other", "no"),
+    } == _labeled_edges_typed(graph)
+    # The backdrop wraps the members plus everything declared under them
+    # (the inner answer box and $fix), but not the owner or its box.
+    assert by_id["grading"]["members"] == ["grader", "grader.yes", "fix", "answer"]
+    assert by_id["grading"]["label"] == "grading problems"
+    assert _node(graph, "grader")["type"] == "question"   # region type
+    assert _node(graph, "fix")["type"] == "go"
+    assert by_id["spread"]["members"] == ["s"]
+    assert _node(graph, "other").get("region") is None    # beside the region, not in it
+    assert "q.yes" not in by_id["grading"]["members"]
+
+
+def test_regions_nest_and_a_node_joins_every_enclosing_one():
+    graph = parse(
+        {
+            "relations": {"yes": {}},
+            "nodes": {
+                "~outer": {
+                    "type": "question",
+                    "$q": {"yes": {"~inner": {"type": "stop", "$a": {}, "$b": {"type": "go"}}}},
+                    "$c": {},
+                    "~direct": {"$d": {}},               # nested in the spec itself
+                },
+            },
+        }
+    )
+    by_id = {r["id"]: r for r in graph["regions"]}
+    assert [r["id"] for r in graph["regions"]] == ["outer", "inner", "direct"]  # outer first
+    assert by_id["outer"]["members"] == ["q", "a", "b", "c", "d"]
+    assert by_id["inner"]["members"] == ["a", "b"]
+    assert by_id["direct"]["members"] == ["d"]
+    assert _node(graph, "a")["region"] == "inner"        # tagged with the innermost
+    assert _node(graph, "a")["type"] == "stop"           # innermost type wins
+    assert _node(graph, "b")["type"] == "go"
+    assert _node(graph, "d")["type"] == "question"       # inherits the outer type
+    assert _node(graph, "c")["region"] == "outer"
+
+
+def test_region_in_a_relation_block_of_a_nested_node_is_an_error():
+    with pytest.raises(ValueError, match="top-level only"):
+        parse(
+            {
+                "relations": {"yes": {}},
+                "nodes": {"$g": {"type": "group", "$q": {"yes": {"~r": {"$a": {}}}}}},
+            }
+        )
+
+
+def test_region_in_a_relation_block_alone_still_makes_the_box():
+    graph = parse(
+        {
+            "relations": {"yes": {"as": "answer"}},
+            "nodes": {"$q": {"yes": {"~r": {"$a": {}}}}},
+        }
+    )
+    assert ("q", "q.yes") in _edge_set(graph)

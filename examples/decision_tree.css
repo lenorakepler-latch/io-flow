@@ -6,3 +6,9 @@
 /* Answer boxes carry the relation name as a class (.yes / .no). */
 .node--answer.yes { border-color: #16a34a; color: #15803d; }
 .node--answer.no  { border-color: #dc2626; color: #b91c1c; }
+
+/* The grading region's backdrop (class: grading -> .region--grading). */
+.region--grading .region__box {
+  --region-fill: rgba(217, 119, 6, 0.08);
+  --region-stroke: rgba(217, 119, 6, 0.55);
+}

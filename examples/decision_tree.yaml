@@ -29,12 +29,17 @@
 # reads best. The `yes` branch of $fpfn below does exactly that; the `no`
 # branch stays nested. Every form the grammar offers appears in this file:
 #
-#   yes: [$a, $b]              list of references          ($fpfn.yes)
+#   yes: [$a, $b]              list of references          ($hasspread.no)
 #   yes: $x                    one reference               ($graderchange.yes)
 #   yes: {$x: }                reference, mapping form     ($gtchange.yes)
 #   yes: {$x: "text"}          reference + edge label      ($gtchange.no)
 #   yes: {$x: {label: ...}}    inline declaration          ($spread, and below)
 #   yes: {as: edge, $x: {}}    per-block render override   ($spread.no / .yes)
+#   yes: {~r: {$x: {}, ...}}   region around the branch     ($fpfn.yes)
+#
+# A `~region` inside a relation block declares its members inline (each
+# connected by that relation) and draws a backdrop around them plus
+# everything declared under them; its `type:` is their default type.
 
 title: "post-rollout triage"
 
@@ -72,7 +77,19 @@ legend:
 nodes:
   $fpfn:
     label: any false positives or false negatives?
-    yes: [$graderchange, $gtchange]    # -> one "yes" box -> two questions, declared below
+    yes:                               # -> one "yes" box -> a REGION of two questions
+      ~grading:
+        label: grading problems
+        class: grading
+        type: question                 # default type for everything declared under it
+        $graderchange:
+          label: is the grader passing answers it shouldn't?
+          yes: $fixgrader              # one reference: no brackets needed
+          no: {$gtchange: }            # same thing in mapping form
+        $gtchange:
+          label: is our answer wrong?
+          yes: {$fixanswer: {type: go, label: correct the answer}}
+          no:  {$escalate: "ask the scientist"}   # reference + edge label on the arrow
     no:                                # -> one "no" box -> the next question, inline
       $spread:
         type: question
@@ -86,24 +103,12 @@ nodes:
           $hasspread:
             type: question             # an inline node may itself branch
             label: do the failures look like the trap?
-            no:
-              $offtarget: {type: stop, label: "failing for the wrong reason"}
+            no: [$offtarget, $escalate]        # list of references
             yes:
               $ship: {type: go, label: approve}
 
-  # The `yes` branch of $fpfn, flattened: these are the two questions it
-  # pointed at, declared at top level because their own branches would have
-  # pushed the tree three levels deeper.
-  $graderchange:
-    type: question
-    label: is the grader passing answers it shouldn't?
-    yes: $fixgrader                    # one reference: no brackets needed
-    no: {$gtchange: }                  # same thing in mapping form
-  $gtchange:
-    type: question
-    label: is our answer wrong?
-    yes: {$fixanswer: {type: go, label: correct the answer}}
-    no:  {$escalate: "ask the scientist"}   # reference + edge label on the arrow
-
+  # Referenced from inside the grading region but declared out here, so they
+  # sit outside its backdrop: the region is what is *written* under it.
   $fixgrader: {type: go, label: tighten the grader}
   $escalate:  {type: stop, label: escalate}
+  $offtarget: {type: stop, label: failing for the wrong reason}
