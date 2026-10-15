@@ -267,7 +267,8 @@ nodes:
 `label:` is stamped onto every edge of that relation that says nothing about
 its own (an explicit `""` keeps a label off); `anchor:` works the same way
 (above). `type:` is the default type for nodes *declared inline* in the
-relation's block — next.
+relation's block — next. `as:` renders the relation as a box instead of an
+arrow — after that.
 
 **Inline declarations.** The unmarked side of a `$`-keyed relation entry
 annotates the edge by type: a string is a label, a number is a weight — and a
@@ -307,6 +308,42 @@ elsewhere is the usual duplicate-name error, and `$x: {}` is always a
 declaration, never a reference. Nesting expresses *branching*; a long linear
 chain would march one indent per step, which is what `steps:` + `autoedges:`
 are for.
+
+**A relation as a box.** Sometimes the answer deserves its own node: one
+"yes" box that several options branch from, rather than "yes" written on each
+arrow. `as:` on the relation says so. It is `edge` by default; a node type
+name renders the relation as a box of that type between the owner and
+everything in its block — and the `nodes:` section doesn't change at all:
+
+```yaml
+relations:
+  yes: {as: answer}        # each `yes:` block becomes an "answer" box
+  no:  {as: answer}
+types:
+  answer: {css: "border-radius: 999px; padding: 2px 10px;"}
+
+nodes:
+  $fpfn:
+    label: any false positive or false negative results?
+    yes:
+      $graderchange: {label: is the grader passing answers it shouldn't?}
+      $gtchange:     {label: is our answer wrong?}
+    no:
+      $spread: {label: any spread?}
+```
+
+`$fpfn` points at a box labeled `yes`, which points at the two questions; the
+box's id is `<owner>.<relation>` (`$fpfn.yes` — addressable from anywhere, like
+a `descriptors:` child), its label is the relation's `label:` or name, and it
+carries the relation name as a CSS class and as `relation:` data for templates.
+Every edge keeps the relation's type, so `.edge--yes` colours the whole branch;
+neither hop carries the relation's default `label:`, since the box is the label
+(a per-entry label or weight still applies). An unmarked
+`as:` *inside* one block overrides the relation for that owner — `yes: {as:
+edge, $x: {}}` keeps a single question on arrows — and a block with no
+references makes no box. `in` relations work symmetrically (sources → box →
+owner). See [`examples/decision_tree.yaml`](examples/decision_tree.yaml), which
+draws the same tree both ways.
 
 **Default types.** An untyped node falls back to what it structurally is:
 `group` when it holds children, `node` when it doesn't. Compound-ness was

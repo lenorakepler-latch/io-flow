@@ -1358,3 +1358,116 @@ def test_relation_label_is_stamped_where_the_edge_says_nothing():
     assert labels[("q", "d", "yes")] == "yes"
     assert labels[("q", "e", "yes")] == "yes"      # explicit edge, typed, no label
     assert labels[("q", "e", "calls")] == "x"      # explicit label wins
+
+
+# --- Relations rendered as a box (`as:`) --------------------------------------
+
+
+def test_relation_as_node_puts_a_box_between_owner_and_targets():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        graph = parse(
+            {
+                "relations": {"yes": {"as": "answer"}, "no": {"as": "answer", "label": "nope"}},
+                "nodes": {
+                    "$q": {
+                        "yes": {"$a": {}, "$b": {}},
+                        "no": {"$c": {}},
+                    }
+                },
+            }
+        )
+    box = _node(graph, "q.yes")
+    assert box["type"] == "answer"
+    assert box["label"] == "yes"                 # relation name by default
+    assert box["parent"] is None                 # a sibling of the owner
+    assert {"class": "yes", "relation": "yes"}.items() <= box["data"].items()
+    assert _node(graph, "q.no")["label"] == "nope"  # relation label: wins
+    assert _labeled_edges_typed(graph) == {
+        ("q", "q.yes", "yes"),
+        ("q.yes", "a", "yes"),
+        ("q.yes", "b", "yes"),
+        ("q", "q.no", "no"),
+        ("q.no", "c", "no"),
+    }
+    # The box IS the label: neither hop carries the relation's default label.
+    labels = {(e["source"], e["target"]): e.get("label") for e in graph["edges"]}
+    assert labels[("q", "q.no")] is None
+    assert labels[("q.no", "c")] is None
+
+
+def test_relation_as_node_keeps_per_entry_labels_and_weights():
+    graph = parse(
+        {
+            "relations": {"yes": {"as": "answer", "label": "yes"}},
+            "nodes": {"$q": {"yes": {"$a": "custom", "$b": 7}}, "$a": {}, "$b": {}},
+        }
+    )
+    by = {(e["source"], e["target"]): e for e in graph["edges"]}
+    assert by[("q.yes", "a")]["label"] == "custom"
+    assert by[("q.yes", "b")]["weight"] == 7
+    assert "label" not in by[("q.yes", "b")]
+
+
+def test_relation_as_node_follows_in_direction_and_plain_refs():
+    graph = parse(
+        {
+            "relations": {"reads": {"direction": "in", "as": "junction"}},
+            "nodes": {"$cfg": {}, "$db": {}, "$run": {"reads": {"$cfg": "", "conf": "$db"}}},
+        }
+    )
+    assert _labeled_edges_typed(graph) == {
+        ("cfg", "run.reads", "reads"),
+        ("db", "run.reads", "reads"),
+        ("run.reads", "run", "reads"),
+    }
+
+
+def test_relation_as_node_skips_empty_blocks():
+    graph = parse(
+        {
+            "relations": {"yes": {"as": "answer"}},
+            "nodes": {"$q": {"yes": {"group": "g"}}, "$r": {"yes": {}}},
+        }
+    )
+    assert {n["id"] for n in graph["nodes"]} == {"q", "r"}
+    assert graph["edges"] == []
+
+
+def test_block_level_as_overrides_the_relation():
+    graph = parse(
+        {
+            "relations": {"yes": {"as": "answer"}, "no": {}},
+            "nodes": {
+                "$q": {
+                    "yes": {"as": "edge", "$a": {}},     # back to a plain arrow
+                    "no": {"as": "answer", "$b": {}},    # box for this owner only
+                },
+                "$r": {"no": {"$c": {}}},
+            },
+        }
+    )
+    assert _labeled_edges_typed(graph) == {
+        ("q", "a", "yes"),
+        ("q", "q.no", "no"),
+        ("q.no", "b", "no"),
+        ("r", "c", "no"),
+    }
+    assert "as" not in {k for e in graph["edges"] for k in e}
+
+
+def test_relation_as_must_name_a_type():
+    with pytest.raises(ValueError, match="'as' must be 'edge' or a node type"):
+        parse({"relations": {"yes": {"as": 3}}, "nodes": {}})
+    with pytest.raises(ValueError, match="'as' must be 'edge' or a node type"):
+        parse({"relations": {"yes": {}}, "nodes": {"$q": {"yes": {"as": "", "$a": {}}}}})
+
+
+def test_relation_as_node_box_is_addressable():
+    graph = parse(
+        {
+            "relations": {"yes": {"as": "answer"}},
+            "nodes": {"$q": {"yes": {"$a": {}}}, "$note": {"calls": {"$q.yes": "see"}}},
+        }
+    )
+    assert ("note", "q.yes", "see") in _labeled_edges(graph)

@@ -2,3 +2,7 @@
    every edge already carries .edge--yes / .edge--no. */
 #edges .edge--yes { stroke: #16a34a; }
 #edges .edge--no  { stroke: #dc2626; stroke-dasharray: 6 4; }
+
+/* Answer boxes carry the relation name as a class (.yes / .no). */
+.node--answer.yes { border-color: #16a34a; color: #15803d; }
+.node--answer.no  { border-color: #dc2626; color: #b91c1c; }

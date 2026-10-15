@@ -16,6 +16,12 @@
 # Each answer is a relation, so `.edge--yes` / `.edge--no` style the two
 # branches (decision_tree.css) and `label:` on the relation puts the answer
 # on every edge without repeating it per entry.
+#
+# `as:` on a relation renders it as a BOX instead: one "answer" node per
+# question that the options branch from (id `<question>.<relation>`, e.g.
+# $fpfn.yes). The `nodes:` section is written the same either way -- the
+# first question below uses boxes, `$spread` goes back to arrows with a
+# block-level `as: edge` so both forms show in one diagram.
 
 title: "post-rollout triage"
 
@@ -24,11 +30,12 @@ diagram:
   layerSpacing: 60
 
 relations:
-  yes: {label: yes, type: outcome}   # direction: out is the default
-  no:  {label: no,  type: outcome}
+  yes: {label: yes, type: outcome, as: answer}   # direction: out is the default
+  no:  {label: no,  type: outcome, as: answer}
 
 types:
   question: {badge: "?"}
+  answer:   {css: "border-radius: 999px; padding: 2px 12px; font-weight: 600;"}
   outcome:  {css: "border-left: 4px solid var(--outcome, #64748b);"}
   stop:     {extends: outcome, badge: stop, css: "--outcome: #dc2626;"}
   go:       {extends: outcome, badge: go,   css: "--outcome: #16a34a;"}
@@ -42,6 +49,7 @@ style:
 legend:
   nodes:
     - question: a decision point
+    - answer: the answer the options branch from
     - stop: this path ends here
     - go: proceed
   edges:
@@ -49,16 +57,25 @@ legend:
     no: the answer was no
 
 nodes:
-  $spread:
-    label: any spread?
-    no:
-      $tooeasy: {type: stop, label: "too easy: no failures"}
-      $toohard: {type: stop, label: "too hard: no passes"}
-    yes:
-      $hasspread:
-        type: question                 # an inline node may itself branch
-        label: do the failures look like the trap?
+  $fpfn:
+    label: any false positives or false negatives?
+    yes:                               # -> one "yes" box -> two questions
+      $graderchange: {type: question, label: is the grader passing answers it shouldn't?}
+      $gtchange:     {type: question, label: is our answer wrong?}
+    no:                                # -> one "no" box -> the next question
+      $spread:
+        type: question
+        label: any spread?
         no:
-          $offtarget: {type: stop, label: "failing for the wrong reason"}
+          as: edge                     # this question's answers stay on arrows
+          $tooeasy: {type: stop, label: "too easy: no failures"}
+          $toohard: {type: stop, label: "too hard: no passes"}
         yes:
-          $ship: {type: go, label: approve}
+          as: edge
+          $hasspread:
+            type: question             # an inline node may itself branch
+            label: do the failures look like the trap?
+            no:
+              $offtarget: {type: stop, label: "failing for the wrong reason"}
+            yes:
+              $ship: {type: go, label: approve}

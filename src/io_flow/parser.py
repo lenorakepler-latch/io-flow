@@ -58,6 +58,12 @@ Rules:
   relation blocks of their own, so a tree-shaped flowchart is written as a
   tree. A relation may declare a default ``label:`` for its edges and a
   default ``type:`` for the nodes declared inline in its blocks.
+* **A relation may render as a box.** ``relations: {yes: {as: answer}}`` puts
+  one synthetic node per (owner, relation) -- id ``<owner>.<relation>``, typed
+  ``answer``, labeled with the relation's label -- between the owner and
+  everything in the block, so several options branch from one "yes" rather
+  than each arrow saying it. An unmarked ``as:`` inside a block overrides the
+  relation for that owner (``as: edge`` is the default arrow form).
 * **Explicit ``edges:`` lists may live at top level or inside any node.**
   Inside a node, an omitted ``from``/``to`` defaults to the declaring node.
   Placement is organization only and never changes meaning: references are
@@ -189,7 +195,8 @@ class Relations:
     key a relation block). ``anchor``/``label``: per-relation defaults stamped
     onto every edge the relation derives, where the edge says nothing itself.
     ``type``: the default node type for nodes *declared inline* in that
-    relation's block (see ``record_edges``).
+    relation's block (see ``record_edges``). ``as_node``: relations rendered
+    as a box rather than an arrow -- name -> the box's node type.
     """
 
     def __init__(self) -> None:
@@ -197,6 +204,18 @@ class Relations:
         self.anchor: dict[str, dict[str, str]] = {}
         self.label: dict[str, str] = {}
         self.type: dict[str, str] = {}
+        self.as_node: dict[str, str] = {}
+
+
+def _as_type(value: Any, where: str) -> str | None:
+    """Normalize an ``as:`` option: ``edge`` (the default) -> None, else a type."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or value.startswith(SIGIL):
+        raise ValueError(
+            f"{where}: 'as' must be 'edge' or a node type name, got {value!r}"
+        )
+    return None if value == "edge" else value
 
 
 def _edge_keys_for(data: dict[str, Any]) -> Relations:
@@ -209,6 +228,7 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
           reads:    {direction: in}
           inherits: {direction: out, anchor: {from: top, to: bottom}}
           yes:      {direction: out, label: yes, type: outcome}
+          no:       {as: answer}
 
     Each registered name becomes usable on any node exactly like ``calls:``,
     tags its edges with ``type: <name>`` (so ``edge--<name>`` is stylable from
@@ -217,7 +237,9 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
     own (re-registering a built-in name works, so ``calls`` can carry a default
     anchor too). ``type:`` is the default type of nodes declared inline in the
     relation's block -- a ``defaults:`` entry for the parent type still wins,
-    as it does over the ``step`` fallback.
+    as it does over the ``step`` fallback. ``as:`` is ``edge`` (default) or a
+    node type: the relation then renders as a *box* of that type between the
+    owner and its targets (see ``record_edges``).
     """
     rel = Relations()
     for name, spec in (data.get("relations", {}) or {}).items():
@@ -239,6 +261,9 @@ def _edge_keys_for(data: dict[str, Any]) -> Relations:
             rel.label[str(name)] = str(spec["label"])
         if spec.get("type") is not None:
             rel.type[str(name)] = str(spec["type"])
+        as_type = _as_type(spec.get("as"), f"relations.{name}")
+        if as_type is not None:
+            rel.as_node[str(name)] = as_type
     return rel
 
 
@@ -467,6 +492,9 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
     # Unmarked strings in relation blocks, checked in pass 2 against node ids
     # (a forgotten $ silently drops an edge; make that loud).
     literals: list[tuple[str, str, str]] = []  # (owner, edge_type, text)
+    # Boxes made by `as:` relations; edges leaving one skip the relation's
+    # default label (the box already says it).
+    junctions: set[str] = set()
     # Explicit `edges:` entries, top-level (owner None) or declared inside a
     # node (owner = that node's id, filling an omitted from/to endpoint).
     explicit: list[tuple[str | None, Any]] = []
@@ -501,10 +529,49 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                     block_group = [str(x) for x in g]  # an edge may be in many groups
                 elif g is not None and not str(g).startswith(SIGIL):
                     block_group = str(g)
+            # A relation may render *as a box*: `relations: {yes: {as: answer}}`
+            # puts one synthetic node per (owner, relation) between the owner
+            # and everything in the block -- the answer the options branch
+            # from. The box is fully determined by the owner and the relation,
+            # so it needs no id of its own: `<owner>.<relation>` (addressable
+            # like any node), typed `as`, labeled with the relation's label,
+            # carrying the relation name as a CSS class and as `relation` data.
+            # An unmarked `as:` inside the block overrides the relation's
+            # setting for this one owner (`as: edge` goes back to arrows).
+            as_type = relations.as_node.get(edge_type)
+            if isinstance(block, dict) and "as" in block and not str(block["as"]).startswith(SIGIL):
+                as_type = _as_type(block["as"], f"{SIGIL}{node_id}.{edge_type}")
+            edge_owner = node_id
+            has_entries = any(
+                str(k).startswith(SIGIL) or (isinstance(v, str) and v.startswith(SIGIL))
+                for k, v in block.items()
+                if str(k) not in ("group", "as")
+            )
+            if as_type is not None and has_entries:
+                junction = f"{node_id}.{edge_type}"
+                add_node(
+                    junction,
+                    {
+                        "type": as_type,
+                        "label": relations.label.get(edge_type, edge_type),
+                        "class": edge_type,
+                        "relation": edge_type,
+                    },
+                    parent_id,
+                    parent_type,
+                    as_type,
+                )
+                # owner -> box, unlabeled ("" = explicitly none: the box IS the
+                # label). Direction flips for `in` relations as for any site.
+                sites.append((node_id, edge_type, junction, "", None, block_group))
+                edge_owner = junction
+                junctions.add(junction)
             for key, value in block.items():
                 key = str(key)
                 if key == "group" and block_group is not None:
                     continue  # the block-level group tag, not an edge
+                if key == "as" and not str(value).startswith(SIGIL):
+                    continue  # the block-level render mode, not an edge
                 key_ref = key.startswith(SIGIL)
                 value_ref = isinstance(value, str) and value.startswith(SIGIL)
                 if key_ref and value_ref:
@@ -528,14 +595,14 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                         parent_type,
                         relations.type.get(edge_type, DEFAULT_TYPE),
                     )
-                    sites.append((node_id, edge_type, _strip(key), None, None, block_group))
+                    sites.append((edge_owner, edge_type, _strip(key), None, None, block_group))
                 elif key_ref:
                     # Unmarked value annotates the edge: a string is label
                     # text ("" = none), a number is a flow weight.
-                    sites.append((node_id, edge_type, _strip(key), value, None, block_group))
+                    sites.append((edge_owner, edge_type, _strip(key), value, None, block_group))
                 elif value_ref:
                     # Unmarked key is a name for the connection (arg name).
-                    sites.append((node_id, edge_type, _strip(value), None, key, block_group))
+                    sites.append((edge_owner, edge_type, _strip(value), None, key, block_group))
                 else:
                     # Pure literal entry (e.g. a default value); no edge. Pass 2
                     # warns if either side exactly matches a node id.
@@ -783,7 +850,12 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
             edge["weight"] = annotation
         elif isinstance(annotation, str) and annotation:
             edge["label"] = annotation
-        if "label" not in edge and not isinstance(annotation, str) and edge_type in relations.label:
+        if (
+            "label" not in edge
+            and not isinstance(annotation, str)
+            and edge_type in relations.label
+            and owner not in junctions
+        ):
             # The entry said nothing about the label (an inline declaration,
             # a bare reference, or a weight): the relation's default applies.
             # An empty string is an explicit "no label" and keeps it off.
