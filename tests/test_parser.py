@@ -1471,3 +1471,44 @@ def test_relation_as_node_box_is_addressable():
         }
     )
     assert ("note", "q.yes", "see") in _labeled_edges(graph)
+
+
+# --- Reference shorthands: `rel: $x` and `rel: [$a, $b]` -----------------------
+
+
+def test_relation_block_accepts_a_bare_reference_or_a_list():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        graph = parse(
+            {
+                "relations": {"yes": {"as": "answer", "label": "yes"}, "no": {}},
+                "nodes": {
+                    "$q": {"yes": "$a", "no": ["$b", "$c"]},
+                    "$a": {}, "$b": {}, "$c": {},
+                    "$r": {"calls": "$a"},     # built-ins take it too
+                },
+            }
+        )
+    assert _labeled_edges_typed(graph) == {
+        ("q", "q.yes", "yes"),
+        ("q.yes", "a", "yes"),
+        ("q", "b", "no"),
+        ("q", "c", "no"),
+        ("r", "a", "calls"),
+    }
+    # The shorthand is a bare reference: no label of its own, so for a plain
+    # relation the default label applies exactly as for `{$x: }`.
+    graph = parse({"relations": {"then": {"label": "then"}}, "nodes": {"$q": {"then": "$a"}, "$a": {}}})
+    assert ("q", "a", "then") in _labeled_edges(graph)
+
+
+def test_relation_shorthand_unresolved_still_warns():
+    with pytest.warns(UnresolvedReferenceWarning, match="nope"):
+        parse({"nodes": {"$q": {"calls": "$nope"}, "$a": {}}})
+
+
+def test_relation_list_form_holds_references_only():
+    with pytest.raises(ValueError, match="holds \\$-references only"):
+        parse({"nodes": {"$q": {"calls": ["$a", "plain"]}, "$a": {}}})
+    with pytest.raises(ValueError, match="must be a mapping"):
+        parse({"nodes": {"$q": {"calls": 3}}})

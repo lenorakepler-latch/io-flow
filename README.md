@@ -305,9 +305,33 @@ takes — `type:`, free data, `$children` (real containment), `edges:` — and a
 `in` relation works the same way (`args: {$config: {type: file}}` declares the
 input where it is consumed). Names stay global: declaring `$x` inline *and*
 elsewhere is the usual duplicate-name error, and `$x: {}` is always a
-declaration, never a reference. Nesting expresses *branching*; a long linear
-chain would march one indent per step, which is what `steps:` + `autoedges:`
-are for.
+declaration, never a reference.
+
+**Flattening a deep tree.** Because names are global, where a node is
+*written* is a layout choice, not a meaning. When the nesting gets too deep,
+point at a node instead and declare it at whatever level reads best — the
+two forms mix freely in one tree:
+
+```yaml
+nodes:
+  $fpfn:
+    label: any false positive or false negative results?
+    yes: [$graderchange, $gtchange]     # references: declared below
+    no:
+      $spread: {label: any spread?}     # mapping: still declared inline
+
+  $graderchange:
+    label: is the grader passing answers it shouldn't?
+    yes: $fixgrader                     # one reference: no brackets needed
+  $gtchange: {label: is our answer wrong?}
+  $fixgrader: {label: fix the grader}
+```
+
+`rel: $x` and `rel: [$a, $b]` are shorthands for a mapping of bare references
+(`{$x: }`); a `$`-marked string is always a reference, so no new rule is
+involved. Labels, weights and inline declarations need the mapping form.
+Nesting expresses *branching*; a long linear chain would march one indent per
+step, which is what `steps:` + `autoedges:` are for.
 
 **A relation as a box.** Sometimes the answer deserves its own node: one
 "yes" box that several options branch from, rather than "yes" written on each

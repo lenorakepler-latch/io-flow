@@ -22,6 +22,19 @@
 # $fpfn.yes). The `nodes:` section is written the same either way -- the
 # first question below uses boxes, `$spread` goes back to arrows with a
 # block-level `as: edge` so both forms show in one diagram.
+#
+# Names are global, so WHERE a node is written is a layout choice: when the
+# nesting gets deep, point at the node (`yes: $x`, `yes: [$a, $b]`, or
+# `$x:` with no value inside the block) and declare it at the level that
+# reads best. The `yes` branch of $fpfn below does exactly that; the `no`
+# branch stays nested. Every form the grammar offers appears in this file:
+#
+#   yes: [$a, $b]              list of references          ($fpfn.yes)
+#   yes: $x                    one reference               ($graderchange.yes)
+#   yes: {$x: }                reference, mapping form     ($gtchange.yes)
+#   yes: {$x: "text"}          reference + edge label      ($gtchange.no)
+#   yes: {$x: {label: ...}}    inline declaration          ($spread, and below)
+#   yes: {as: edge, $x: {}}    per-block render override   ($spread.no / .yes)
 
 title: "post-rollout triage"
 
@@ -59,10 +72,8 @@ legend:
 nodes:
   $fpfn:
     label: any false positives or false negatives?
-    yes:                               # -> one "yes" box -> two questions
-      $graderchange: {type: question, label: is the grader passing answers it shouldn't?}
-      $gtchange:     {type: question, label: is our answer wrong?}
-    no:                                # -> one "no" box -> the next question
+    yes: [$graderchange, $gtchange]    # -> one "yes" box -> two questions, declared below
+    no:                                # -> one "no" box -> the next question, inline
       $spread:
         type: question
         label: any spread?
@@ -79,3 +90,20 @@ nodes:
               $offtarget: {type: stop, label: "failing for the wrong reason"}
             yes:
               $ship: {type: go, label: approve}
+
+  # The `yes` branch of $fpfn, flattened: these are the two questions it
+  # pointed at, declared at top level because their own branches would have
+  # pushed the tree three levels deeper.
+  $graderchange:
+    type: question
+    label: is the grader passing answers it shouldn't?
+    yes: $fixgrader                    # one reference: no brackets needed
+    no: {$gtchange: }                  # same thing in mapping form
+  $gtchange:
+    type: question
+    label: is our answer wrong?
+    yes: {$fixanswer: {type: go, label: correct the answer}}
+    no:  {$escalate: "ask the scientist"}   # reference + edge label on the arrow
+
+  $fixgrader: {type: go, label: tighten the grader}
+  $escalate:  {type: stop, label: escalate}

@@ -58,6 +58,9 @@ Rules:
   relation blocks of their own, so a tree-shaped flowchart is written as a
   tree. A relation may declare a default ``label:`` for its edges and a
   default ``type:`` for the nodes declared inline in its blocks.
+* **``yes: $next`` and ``yes: [$a, $b]`` are shorthands** for a mapping of
+  bare references (``{$next: }``), since a ``$``-marked string is always a
+  reference. Labels, weights and inline declarations need the mapping form.
 * **A relation may render as a box.** ``relations: {yes: {as: answer}}`` puts
   one synthetic node per (owner, relation) -- id ``<owner>.<relation>``, typed
   ``answer``, labeled with the relation's label -- between the owner and
@@ -519,6 +522,25 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         """
         for edge_type in edge_keys:
             block = spec.get(edge_type, {}) or {}
+            # Shorthands for plain references: `yes: $next` and `yes: [$a, $b]`
+            # mean `yes: {$next: }` / `yes: {$a: , $b: }`. A $-marked string is
+            # always a reference, so no new rule is involved -- only a shape.
+            if isinstance(block, str):
+                block = [block]
+            if isinstance(block, list):
+                bad = [x for x in block if not (isinstance(x, str) and x.startswith(SIGIL))]
+                if bad:
+                    raise ValueError(
+                        f"{SIGIL}{node_id}.{edge_type}: a list form holds $-references "
+                        f"only (got {bad[0]!r}); use a mapping for labels, weights, or "
+                        f"inline declarations"
+                    )
+                block = {ref: None for ref in block}
+            if not isinstance(block, dict):
+                raise ValueError(
+                    f"{SIGIL}{node_id}.{edge_type}: must be a mapping, a $-reference, "
+                    f"or a list of $-references, got {block!r}"
+                )
             # An unmarked `group:` inside a relation block tags every edge that
             # block derives (overriding the node's own `group:`), so a node can
             # split its relations across groups -- e.g. `reads: {group: s2, ...}`.
