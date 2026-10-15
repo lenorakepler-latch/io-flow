@@ -155,6 +155,11 @@ body {
 /* ---- Nodes ---------------------------------------------------------------- */
 .node {
   position: absolute;
+  /* Intrinsic width: size to content and wrap only at max-width. Nodes are
+   * measured for layout before they have a position, inside containers that
+   * may have no width yet; shrink-to-fit would wrap against that (one word --
+   * or character -- per line). The engine's inline width, once set, wins. */
+  width: max-content;
   max-width: 260px;
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -184,9 +189,22 @@ body {
   flex-direction: column;
   gap: 2px;
 }
+/* Leaf titles wrap inside the node's max-width (the measured box grows with
+ * them; layout reads the measured size). `anywhere` also breaks a single long
+ * token (a path, an identifier) rather than letting it push past the border. */
 .node__title {
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* Compound headers are a fixed-height overlay (--header-h) and can't grow, so
+ * their titles stay on one line; the compound is floored at the header's
+ * width instead (layout.js headerWidth). Empty compounds size like leaves. */
+.node--group > .node__header .node__title,
+.node--class > .node__header .node__title {
   white-space: nowrap;
+}
+.node--empty > .node__header .node__title {
+  white-space: normal;
 }
 .node__meta {
   color: var(--muted);
