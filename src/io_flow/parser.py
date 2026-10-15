@@ -50,6 +50,14 @@ Rules:
   flow weight (``calls: {$plot: 42}``) that the viewer renders as stroke
   width (see the ``diagram: edgeWidth:`` block). Explicit ``edges:`` entries
   take an optional numeric ``weight:`` alongside ``type``/``label``.
+* **A mapping value is an inline declaration.** ``yes: {$ship: {label: ...}}``
+  declares ``$ship`` right there (an ordinary node spec) and draws the edge.
+  The new node is the *owner's sibling*, not its child -- containment is
+  spelled by a ``$child:`` directly in the node; a ``$child:`` inside a
+  relation block means "connected by this relation". Inline specs may carry
+  relation blocks of their own, so a tree-shaped flowchart is written as a
+  tree. A relation may declare a default ``label:`` for its edges and a
+  default ``type:`` for the nodes declared inline in its blocks.
 * **Explicit ``edges:`` lists may live at top level or inside any node.**
   Inside a node, an omitted ``from``/``to`` defaults to the declaring node.
   Placement is organization only and never changes meaning: references are
@@ -174,7 +182,24 @@ def _anchor_spec(value: Any, where: str) -> dict[str, str]:
     return out
 
 
-def _edge_keys_for(data: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+class Relations:
+    """What the document's ``relations:`` block (plus the built-ins) declares.
+
+    ``direction``: name -> ``"in"``/``"out"`` (membership here is what makes a
+    key a relation block). ``anchor``/``label``: per-relation defaults stamped
+    onto every edge the relation derives, where the edge says nothing itself.
+    ``type``: the default node type for nodes *declared inline* in that
+    relation's block (see ``record_edges``).
+    """
+
+    def __init__(self) -> None:
+        self.direction: dict[str, str] = dict(EDGE_KEYS)
+        self.anchor: dict[str, dict[str, str]] = {}
+        self.label: dict[str, str] = {}
+        self.type: dict[str, str] = {}
+
+
+def _edge_keys_for(data: dict[str, Any]) -> Relations:
     """Built-in EDGE_KEYS plus any registered in the document's ``relations:``.
 
     A diagram can declare new relationship kinds without touching this module::
@@ -183,16 +208,18 @@ def _edge_keys_for(data: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict
           emits:    {direction: out}
           reads:    {direction: in}
           inherits: {direction: out, anchor: {from: top, to: bottom}}
+          yes:      {direction: out, label: yes, type: outcome}
 
     Each registered name becomes usable on any node exactly like ``calls:``,
     tags its edges with ``type: <name>`` (so ``edge--<name>`` is stylable from
-    CSS), and follows the same resolve/warn rules. An ``anchor:`` on the
-    relation is stamped onto every edge it derives (re-registering a built-in
-    name works, so ``calls`` can carry a default anchor too). Returns
-    ``(name -> direction, name -> anchor spec)``.
+    CSS), and follows the same resolve/warn rules. An ``anchor:`` or ``label:``
+    on the relation is stamped onto every edge it derives that doesn't set its
+    own (re-registering a built-in name works, so ``calls`` can carry a default
+    anchor too). ``type:`` is the default type of nodes declared inline in the
+    relation's block -- a ``defaults:`` entry for the parent type still wins,
+    as it does over the ``step`` fallback.
     """
-    keys = dict(EDGE_KEYS)
-    anchors: dict[str, dict[str, str]] = {}
+    rel = Relations()
     for name, spec in (data.get("relations", {}) or {}).items():
         spec = spec or {}
         if "ref" in spec:
@@ -205,10 +232,14 @@ def _edge_keys_for(data: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict
             raise ValueError(
                 f"relations.{name}: direction must be 'in' or 'out', got {direction!r}"
             )
-        keys[str(name)] = direction
+        rel.direction[str(name)] = direction
         if spec.get("anchor") is not None:
-            anchors[str(name)] = _anchor_spec(spec["anchor"], f"relations.{name}")
-    return keys, anchors
+            rel.anchor[str(name)] = _anchor_spec(spec["anchor"], f"relations.{name}")
+        if spec.get("label") is not None:
+            rel.label[str(name)] = str(spec["label"])
+        if spec.get("type") is not None:
+            rel.type[str(name)] = str(spec["type"])
+    return rel
 
 
 def _load_types_value(value: Any, base_dir: Path) -> dict[str, Any]:
@@ -384,7 +415,9 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
     # node id -> {name, lang, text, truncated}; embedded file bodies for src:.
     file_contents: dict[str, dict[str, Any]] = {}
 
-    edge_keys, relation_anchors = _edge_keys_for(data)
+    relations = _edge_keys_for(data)
+    edge_keys = relations.direction
+    relation_anchors = relations.anchor
 
     defaults = data.get("defaults", {}) or {}
     if not isinstance(defaults, dict):
@@ -445,8 +478,17 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
         for espec in block:
             explicit.append((owner, espec))
 
-    def record_edges(node_id: str, spec: dict[str, Any]) -> None:
-        """Queue every relation-block entry on ``spec`` for pass 2."""
+    def record_edges(
+        node_id: str,
+        spec: dict[str, Any],
+        parent_id: str | None,
+        parent_type: str | None,
+    ) -> None:
+        """Queue every relation-block entry on ``spec`` for pass 2.
+
+        ``parent_id``/``parent_type`` are the *owner's* parent: a node declared
+        inline in a relation block becomes the owner's sibling, not its child.
+        """
         for edge_type in edge_keys:
             block = spec.get(edge_type, {}) or {}
             # An unmarked `group:` inside a relation block tags every edge that
@@ -470,7 +512,24 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                         f"{edge_type} entry {key}: {value} on {SIGIL}{node_id}: both "
                         f"sides are $-marked; exactly one side may be the reference"
                     )
-                if key_ref:
+                if key_ref and isinstance(value, dict):
+                    # A mapping value is an *inline declaration*: the node is
+                    # declared right here (an ordinary node spec -- type, data,
+                    # $children, relation blocks of its own) and the edge is
+                    # drawn as for any reference. The new node is the owner's
+                    # sibling: containment already has a spelling (a $child
+                    # directly in the node), so this one means "connected by
+                    # this relation". Nesting relation blocks inside inline
+                    # specs is how a tree-shaped flowchart reads as a tree.
+                    add_node(
+                        _strip(key),
+                        value,
+                        parent_id,
+                        parent_type,
+                        relations.type.get(edge_type, DEFAULT_TYPE),
+                    )
+                    sites.append((node_id, edge_type, _strip(key), None, None, block_group))
+                elif key_ref:
                     # Unmarked value annotates the edge: a string is label
                     # text ("" = none), a number is a flow weight.
                     sites.append((node_id, edge_type, _strip(key), value, None, block_group))
@@ -569,7 +628,7 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
                 "text": text,
                 "truncated": truncated,
             }
-        record_edges(node_id, spec)
+        record_edges(node_id, spec, parent_id, parent_type)
         # Descriptor fields (registered in `descriptors:`) expand into synthetic
         # child boxes, emitted before real children so they sit first. The value
         # rides along as `text` for the child type's template. A collision on the
@@ -724,6 +783,11 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
             edge["weight"] = annotation
         elif isinstance(annotation, str) and annotation:
             edge["label"] = annotation
+        if "label" not in edge and not isinstance(annotation, str) and edge_type in relations.label:
+            # The entry said nothing about the label (an inline declaration,
+            # a bare reference, or a weight): the relation's default applies.
+            # An empty string is an explicit "no label" and keeps it off.
+            edge["label"] = relations.label[edge_type]
         # A block-level `group:` wins over the node's own `group:`. May be a
         # list (edge belongs to several groups).
         grp = block_group if block_group is not None else node_group.get(owner)
@@ -815,6 +879,8 @@ def parse(data: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
             edge["anchor"] = _anchor_spec(spec["anchor"], f"explicit edge {spec!r}")
         elif edge.get("type") in relation_anchors:
             edge["anchor"] = relation_anchors[edge["type"]]
+        if "label" not in edge and edge.get("type") in relations.label:
+            edge["label"] = relations.label[edge["type"]]
         edges.append(edge)
 
     # --- Pass 2c: dedupe --------------------------------------------------------

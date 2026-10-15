@@ -118,7 +118,10 @@ Inside a node's mapping:
   its type contributed (type declarations have a `class:` of their own, below).
 - **`steps:`** — ordered children whose position is their identity, and
   **`autoedges:`** — chain them in that order (below).
-- **relation names** (`args`/`calls`/`returns`/registered) — edge blocks.
+- **relation names** (`args`/`calls`/`returns`/registered) — edge blocks. A
+  `$name` entry whose value is a *mapping* declares that node inline, as a
+  sibling, and draws the edge — a tree-shaped flowchart reads as a tree
+  (below).
 - **`edges:`** — a locally-declared explicit-edge list, handy for keeping a
   group's internal wiring inside the group. An omitted `from`/`to` defaults
   to the declaring node. Placement is organization only: references are
@@ -248,17 +251,62 @@ unsaved cycles are lost on reload, same as drags.
 
 **Registering new relationship kinds.** `relations:` extends that table per
 diagram, no code required. Because references self-mark, a relation declares
-only its direction:
+only its direction, plus optional defaults for the edges it derives:
 
 ```yaml
 relations:
   emits: {direction: out}
   reads: {direction: in}
+  yes:   {direction: out, label: yes, type: outcome}
 
 nodes:
   $log: {type: file}
   $a: {emits: {$log: "event"}}        # a -> log, labeled, class edge--emits
 ```
+
+`label:` is stamped onto every edge of that relation that says nothing about
+its own (an explicit `""` keeps a label off); `anchor:` works the same way
+(above). `type:` is the default type for nodes *declared inline* in the
+relation's block — next.
+
+**Inline declarations.** The unmarked side of a `$`-keyed relation entry
+annotates the edge by type: a string is a label, a number is a weight — and a
+**mapping is a declaration**. The node is declared right there, the edge is
+drawn as for any reference, and the new node is placed *beside* the owner (same
+parent), not inside it: containment already has a spelling (a `$child:`
+directly in the node), so a `$child:` inside a relation block means "connected
+by this relation". Because the inline spec is an ordinary node spec, it can
+carry relation blocks of its own, and the YAML's indentation becomes the
+flowchart (see [`examples/decision_tree.yaml`](examples/decision_tree.yaml)):
+
+```yaml
+diagram: {direction: DOWN}
+relations:
+  yes: {label: yes}                  # direction: out is the default
+  no:  {label: no}
+
+nodes:
+  $spread:
+    label: any spread?
+    no:
+      $tooeasy: {label: "too easy, no failures"}   # declared here; spread -> tooeasy
+      $toohard: {label: "too hard, no passes"}
+    yes:
+      $hasspread:
+        label: some passes, some failures
+        yes:
+          $ship: {}                  # empty mapping: label is the name
+```
+
+Each branch kind is a relation, so `.edge--yes` / `.edge--no` style the two
+answers without any per-edge markup. The inline spec takes everything a node
+takes — `type:`, free data, `$children` (real containment), `edges:` — and an
+`in` relation works the same way (`args: {$config: {type: file}}` declares the
+input where it is consumed). Names stay global: declaring `$x` inline *and*
+elsewhere is the usual duplicate-name error, and `$x: {}` is always a
+declaration, never a reference. Nesting expresses *branching*; a long linear
+chain would march one indent per step, which is what `steps:` + `autoedges:`
+are for.
 
 **Default types.** An untyped node falls back to what it structurally is:
 `group` when it holds children, `node` when it doesn't. Compound-ness was

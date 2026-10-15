@@ -1,0 +1,4 @@
+/* Branch colouring for decision_tree.yaml: each answer is a relation, so
+   every edge already carries .edge--yes / .edge--no. */
+#edges .edge--yes { stroke: #16a34a; }
+#edges .edge--no  { stroke: #dc2626; stroke-dasharray: 6 4; }

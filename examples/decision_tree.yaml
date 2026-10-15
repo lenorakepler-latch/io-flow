@@ -1,0 +1,64 @@
+# Inline declarations: a flowchart written as the tree it is.
+#
+# Inside a relation block, the unmarked side of a $-key entry annotates the
+# edge BY TYPE -- a string is a label, a number is a weight -- and a MAPPING
+# is a declaration: the node is declared right there and the edge is drawn.
+#
+#     no:
+#       $tooeasy: {label: "too easy"}    # declares $tooeasy, draws q -> tooeasy
+#
+# The declared node is the owner's SIBLING (same parent), not its child.
+# Containment already has a spelling (a $child: directly in the node); a
+# $child: inside a relation block means "connected by this relation". The
+# inline spec is an ordinary node spec, so it may carry relation blocks of
+# its own -- which is how the YAML indentation below *is* the flowchart.
+#
+# Each answer is a relation, so `.edge--yes` / `.edge--no` style the two
+# branches (decision_tree.css) and `label:` on the relation puts the answer
+# on every edge without repeating it per entry.
+
+title: "post-rollout triage"
+
+diagram:
+  direction: DOWN
+  layerSpacing: 60
+
+relations:
+  yes: {label: yes, type: outcome}   # direction: out is the default
+  no:  {label: no,  type: outcome}
+
+types:
+  question: {badge: "?"}
+  outcome:  {css: "border-left: 4px solid var(--outcome, #64748b);"}
+  stop:     {extends: outcome, badge: stop, css: "--outcome: #dc2626;"}
+  go:       {extends: outcome, badge: go,   css: "--outcome: #16a34a;"}
+
+defaults:
+  _root: question   # the untyped top-level nodes are questions
+
+style:
+  skin: decision_tree.css
+
+legend:
+  nodes:
+    - question: a decision point
+    - stop: this path ends here
+    - go: proceed
+  edges:
+    yes: the answer was yes
+    no: the answer was no
+
+nodes:
+  $spread:
+    label: any spread?
+    no:
+      $tooeasy: {type: stop, label: "too easy: no failures"}
+      $toohard: {type: stop, label: "too hard: no passes"}
+    yes:
+      $hasspread:
+        type: question                 # an inline node may itself branch
+        label: do the failures look like the trap?
+        no:
+          $offtarget: {type: stop, label: "failing for the wrong reason"}
+        yes:
+          $ship: {type: go, label: approve}

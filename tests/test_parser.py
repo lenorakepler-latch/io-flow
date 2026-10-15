@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from io_flow.parser import (
+    DuplicateNodeError,
     UnmarkedReferenceWarning,
     UnusedDefaultWarning,
     UnresolvedReferenceWarning,
@@ -1201,3 +1202,159 @@ def test_edge_group_can_be_a_list():
         "nodes": {"$s": {"writes": {"group": ["s6", "s7"], "$e": ""}}, "$e": {}},
     })
     assert g["edges"][0]["group"] == ["s6", "s7"]
+
+
+# --- Inline declarations in relation blocks ---------------------------------
+
+
+def test_inline_declaration_declares_node_and_draws_edge():
+    """A mapping value on a $-key declares the node right there."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no unresolved-reference warning
+        graph = parse(
+            {
+                "relations": {"no": {"direction": "out"}},
+                "nodes": {
+                    "$spread": {
+                        "label": "any spread?",
+                        "no": {
+                            "$tooeasy": {"label": "too easy, no failures"},
+                            "$toohard": {"label": "too hard, no passes"},
+                        },
+                    }
+                },
+            }
+        )
+    assert _node(graph, "tooeasy")["label"] == "too easy, no failures"
+    assert _node(graph, "toohard")["type"] == "node"
+    assert _labeled_edges_typed(graph) == {
+        ("spread", "tooeasy", "no"),
+        ("spread", "toohard", "no"),
+    }
+    # The relation block is wiring, not sidebar data for the declared node.
+    assert _node(graph, "tooeasy")["data"] == {"label": "too easy, no failures"}
+
+
+def test_inline_declaration_is_a_sibling_not_a_child():
+    graph = parse(
+        {
+            "relations": {"yes": {"direction": "out"}},
+            "nodes": {
+                "$stage": {
+                    "type": "stage",
+                    "$q": {"yes": {"$a": {}}},
+                },
+            },
+        }
+    )
+    assert _node(graph, "q")["parent"] == "stage"
+    assert _node(graph, "a")["parent"] == "stage"  # beside $q, not inside it
+    assert _node(graph, "a")["label"] == "a"  # empty mapping: label is the name
+    # $q holds no $children, so it is still a leaf.
+    assert _node(graph, "q")["type"] == "node"
+
+
+def test_inline_declaration_nests_into_a_tree():
+    graph = parse(
+        {
+            "relations": {"yes": {}, "no": {}},
+            "nodes": {
+                "$q1": {
+                    "no": {"$done": {}},
+                    "yes": {
+                        "$q2": {
+                            "no": {"$stop": {}},
+                            "yes": {"$go": {"type": "outcome"}},
+                        }
+                    },
+                }
+            },
+        }
+    )
+    assert _labeled_edges_typed(graph) == {
+        ("q1", "done", "no"),
+        ("q1", "q2", "yes"),
+        ("q2", "stop", "no"),
+        ("q2", "go", "yes"),
+    }
+    assert all(n["parent"] is None for n in graph["nodes"])
+    assert _node(graph, "go")["type"] == "outcome"
+
+
+def test_inline_declaration_works_for_in_relations():
+    graph = parse({"nodes": {"$run": {"args": {"$cfg": {"type": "file"}}}}})
+    assert _node(graph, "cfg")["type"] == "file"
+    assert _labeled_edges_typed(graph) == {("cfg", "run", "args")}
+
+
+def test_inline_declaration_spec_is_an_ordinary_node_spec():
+    graph = parse(
+        {
+            "relations": {"then": {}},
+            "nodes": {
+                "$a": {
+                    "then": {
+                        "$b": {
+                            "loc": "x.py",            # free data
+                            "$inner": {},             # containment still works
+                            "calls": {"$a": "back"},  # relation blocks of its own
+                            "edges": [{"to": "$a", "type": "returns"}],
+                        }
+                    }
+                }
+            },
+        }
+    )
+    assert _node(graph, "b")["data"]["loc"] == "x.py"
+    assert _node(graph, "b")["type"] == "group"
+    assert _node(graph, "inner")["parent"] == "b"
+    assert {("a", "b", "then"), ("b", "a", "calls"), ("b", "a", "returns")} <= _labeled_edges_typed(graph)
+
+
+def test_inline_declaration_duplicate_is_an_error():
+    with pytest.raises(DuplicateNodeError):
+        parse(
+            {
+                "relations": {"then": {}},
+                "nodes": {"$a": {"then": {"$b": {}}}, "$b": {}},
+            }
+        )
+
+
+def test_relation_type_is_the_inline_default():
+    graph = parse(
+        {
+            "relations": {"yes": {"type": "outcome"}},
+            "defaults": {"stage": "rule"},
+            "nodes": {
+                "$q": {"yes": {"$a": {}, "$b": {"type": "gate"}}},
+                "$s": {"type": "stage", "$q2": {"yes": {"$c": {}}}},
+            },
+        }
+    )
+    assert _node(graph, "a")["type"] == "outcome"
+    assert _node(graph, "b")["type"] == "gate"  # explicit type wins
+    assert _node(graph, "c")["type"] == "rule"  # defaults: for the parent type wins
+
+
+def test_relation_label_is_stamped_where_the_edge_says_nothing():
+    graph = parse(
+        {
+            "relations": {"yes": {"label": "yes"}, "calls": {"label": "calls"}},
+            "nodes": {
+                "$q": {"yes": {"$a": {}, "$b": "custom", "$c": "", "$d": 3}},
+                "$b": {}, "$c": {}, "$d": {}, "$e": {},
+            },
+            "edges": [
+                {"from": "$q", "to": "$e", "type": "yes"},
+                {"from": "$q", "to": "$e", "type": "calls", "label": "x"},
+            ],
+        }
+    )
+    labels = {(e["source"], e["target"], e.get("type")): e.get("label") for e in graph["edges"]}
+    assert labels[("q", "a", "yes")] == "yes"
+    assert labels[("q", "b", "yes")] == "custom"
+    assert labels[("q", "c", "yes")] is None
+    assert labels[("q", "d", "yes")] == "yes"
+    assert labels[("q", "e", "yes")] == "yes"      # explicit edge, typed, no label
+    assert labels[("q", "e", "calls")] == "x"      # explicit label wins
