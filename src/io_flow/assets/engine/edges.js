@@ -180,7 +180,15 @@ window.IOFlow = window.IOFlow || {};
     // `diagram: sidebarOnlyEdgeTypes: [...]` — relations that are recorded in
     // the model (and listed in a node's sidebar) but never drawn or routed.
     const sbOnly = new Set((state.graph.diagram || {}).sidebarOnlyEdgeTypes || []);
-    const eps = state.graph.edges.filter((e) => !sbOnly.has(e.type)).map((edge) => {
+    // Engine routes (layout.js collectRoutes, `diagram: edgeRouting:`), keyed
+    // `edge_<index into graph.edges>`; an edge with one keeps its endpoints
+    // and bends and stays out of the face stacks.
+    const routes = state.routes || null;
+    const routing = String((state.graph.diagram || {}).edgeRouting || "").toLowerCase();
+    const eps = [];
+    state.graph.edges.forEach((edge, i) => {
+      if (sbOnly.has(edge.type)) return;
+      const route = routes && routes["edge_" + i];
       const sVis = visibleIdOf(state, edge.source);
       const tVis = visibleIdOf(state, edge.target);
       const s = boxOf(state, sVis);
@@ -205,7 +213,10 @@ window.IOFlow = window.IOFlow || {};
       const tFace =
         SIDES[anchor.to] || nodeSide(tVis, "in") || { axis: horiz ? "h" : "v", sign: -dir };
       const width = widthOf(edge);
-      return {
+      // A routed edge is drawn only while both ends still sit where the
+      // engine left them; collapse re-anchors an end, so the route goes.
+      const routed = route && sVis === edge.source && tVis === edge.target ? route : null;
+      eps.push({
         edge,
         sVis,
         tVis,
@@ -215,13 +226,15 @@ window.IOFlow = window.IOFlow || {};
         tFace,
         width,
         band: width != null ? width : BASE_BAND,
+        route: routed,
+        routing,
         // Both endpoints inside the same collapsed compound: the edge is
         // interior detail of a closed box -- don't draw it, and don't let
         // it occupy anchor slots that real edges need.
         hidden: sVis === tVis,
-        sAnchor: { x: s.x + s.w / 2, y: s.y + s.h / 2 },
-        tAnchor: { x: t.x + t.w / 2, y: t.y + t.h / 2 },
-      };
+        sAnchor: routed ? routed[0] : { x: s.x + s.w / 2, y: s.y + s.h / 2 },
+        tAnchor: routed ? routed[routed.length - 1] : { x: t.x + t.w / 2, y: t.y + t.h / 2 },
+      });
     });
 
     // Group endpoint usages by (visible node, face). Keys encode axis +
@@ -229,7 +242,7 @@ window.IOFlow = window.IOFlow || {};
     const groups = {};
     const faceKey = (face) => face.axis + (face.sign > 0 ? "+" : "-");
     eps.forEach((ep) => {
-      if (ep.hidden) return;
+      if (ep.hidden || ep.route) return;
       const sKey = ep.sVis + "|" + faceKey(ep.sFace);
       const tKey = ep.tVis + "|" + faceKey(ep.tFace);
       (groups[sKey] = groups[sKey] || []).push({ ep, end: "s" });
@@ -278,7 +291,66 @@ window.IOFlow = window.IOFlow || {};
   // ends may sit on unrelated faces (anchor: declarations). With automatic
   // (opposite-face) endpoints this is byte-identical to extending along the
   // shared routing axis.
+  // The SVG path for an engine route. Orthogonal routes get a small rounded
+  // corner at each bend; polylines are drawn as given; ELK's spline routes
+  // carry cubic control points in threes (a trailing pair is quadratic). The
+  // label sits halfway along the polyline through the points.
+  const CORNER = 8;
+  function pathFromRoute(pts, routing) {
+    const seg = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    if (routing === "splines") {
+      let i = 1;
+      while (i < pts.length) {
+        const rest = pts.length - i;
+        if (rest >= 3) {
+          d += ` C ${pts[i].x} ${pts[i].y}, ${pts[i + 1].x} ${pts[i + 1].y}, ${pts[i + 2].x} ${pts[i + 2].y}`;
+          i += 3;
+        } else if (rest === 2) {
+          d += ` Q ${pts[i].x} ${pts[i].y}, ${pts[i + 1].x} ${pts[i + 1].y}`;
+          i += 2;
+        } else {
+          d += ` L ${pts[i].x} ${pts[i].y}`;
+          i += 1;
+        }
+      }
+    } else {
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        const prev = pts[i - 1];
+        const next = pts[i + 1];
+        const r = routing === "orthogonal" && next ? Math.min(CORNER, seg(prev, p) / 2, seg(p, next) / 2) : 0;
+        if (r > 0.5) {
+          const a = { x: p.x + ((prev.x - p.x) / seg(prev, p)) * r, y: p.y + ((prev.y - p.y) / seg(prev, p)) * r };
+          const b = { x: p.x + ((next.x - p.x) / seg(p, next)) * r, y: p.y + ((next.y - p.y) / seg(p, next)) * r };
+          d += ` L ${a.x} ${a.y} Q ${p.x} ${p.y}, ${b.x} ${b.y}`;
+        } else {
+          d += ` L ${p.x} ${p.y}`;
+        }
+      }
+    }
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += seg(pts[i - 1], pts[i]);
+    let left = total / 2;
+    let mid = pts[0];
+    for (let i = 1; i < pts.length; i++) {
+      const l = seg(pts[i - 1], pts[i]);
+      if (l >= left) {
+        const f = l ? left / l : 0;
+        mid = { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f };
+        break;
+      }
+      left -= l;
+    }
+    return { d, mid };
+  }
+
   function routeOf(ep) {
+    if (ep.route) {
+      const r = pathFromRoute(ep.route, ep.routing);
+      if (ep.route.label) r.mid = ep.route.label; // the engine placed the label
+      return r;
+    }
     const sx = ep.sAnchor.x;
     const sy = ep.sAnchor.y;
     const tx = ep.tAnchor.x;
@@ -391,7 +463,15 @@ window.IOFlow = window.IOFlow || {};
   // re-side stacks on nodes it isn't connected to only via shared groups,
   // and at this tool's scale (low hundreds of edges) a full pass per move
   // is cheap. The nodeId argument is kept for API compatibility.
-  function updateFor(state, _nodeId) {
+  function updateFor(state, nodeId) {
+    // An engine route is only right for the positions the engine chose: once
+    // a node moves, its edges go back to the face-to-face curve.
+    if (state.routes && nodeId != null) {
+      const touches = (end) => end === nodeId || isAncestor(state, nodeId, end);
+      state.graph.edges.forEach((e, i) => {
+        if (touches(e.source) || touches(e.target)) delete state.routes["edge_" + i];
+      });
+    }
     applyGeometry(state, computeGeometry(state));
     if (IOF.regions) IOF.regions.renderAll(state); // keep backdrops under dragged nodes
   }
@@ -403,6 +483,13 @@ window.IOFlow = window.IOFlow || {};
       const a = absPos(state, n.id);
       maxX = Math.max(maxX, a.x + a.w);
       maxY = Math.max(maxY, a.y + a.h);
+    });
+    // Routed edges may swing outside the node extent (a wrap-back row).
+    (state.edgeGeom || []).forEach((ep) => {
+      (ep.route || []).forEach((p) => {
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+      });
     });
     state.contentSize = { w: maxX, h: maxY };
     state.svg.setAttribute("width", maxX + 80);

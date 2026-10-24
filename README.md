@@ -519,6 +519,9 @@ diagram:
   layerSpacing: 70       # between layers
   edgeWidth:             # weighted-edge stroke range (see Weighted edges)
     {min: 1.5, max: 12, scale: sqrt}
+  edgeRouting: orthogonal # the engine routes the edges too (see LAYOUT.md)
+  wrap: 1.8               # fold a long layered flow into rows at this aspect ratio
+  fitMinScale: 0.5        # the first view never zooms out past this
   elk:                   # raw ELK options, highest precedence
     elk.aspectRatio: "2"
 ```

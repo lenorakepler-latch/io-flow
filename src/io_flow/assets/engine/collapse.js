@@ -57,6 +57,7 @@ window.IOFlow = window.IOFlow || {};
       // No ELK to reflow with (or reflowing would discard manual placement):
       // shrink in place. state.pos keeps the expanded size for restore.
       el.style.height = (on ? IOF.headerH() : state.pos[id].h) + "px";
+      state.routes = null; // engine routes assumed the expanded boxes
       IOF.edges.renderAll(state);
       return;
     }
@@ -70,6 +71,7 @@ window.IOFlow = window.IOFlow || {};
     });
     const laid = await IOF.layout.run(state.graph, state.nodeEls, hints, state.stacks, state.collapsed);
     IOF.applyPositions(state, laid);
+    state.routes = laid._routes || null;
     IOF.edges.renderAll(state);
   }
 

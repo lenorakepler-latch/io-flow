@@ -29,8 +29,13 @@ window.IOFlow = window.IOFlow || {};
 
   // Initial view: center the diagram in the viewport (zooming out to fit when
   // it's larger than the window) instead of starting in the top-left corner
-  // under the search/legend chrome. Never zooms in past 1:1.
+  // under the search/legend chrome. Never zooms in past 1:1, and never out
+  // past `diagram: fitMinScale:` (default 0.5): below that the text is
+  // unreadable anyway, so a big chart opens on its top-left corner at a
+  // readable scale and the reader pans. `fitMinScale: 0` restores fit-all.
   function fitAndCenter(state, pz) {
+    const cfg = state.graph.diagram || {};
+    const floor = cfg.fitMinScale != null ? Math.max(0.15, +cfg.fitMinScale) : 0.5;
     const vp = state.viewport.getBoundingClientRect();
     let minX = Infinity,
       minY = Infinity,
@@ -49,11 +54,17 @@ window.IOFlow = window.IOFlow || {};
     const pad = 24;
     const w = maxX - minX;
     const h = maxY - minY;
-    const scale = Math.max(
-      Math.min(1, (vp.width - 2 * pad) / w, (vp.height - 2 * pad) / h),
-      0.15 // keep within minZoom
-    );
+    const fit = Math.min(1, (vp.width - 2 * pad) / w, (vp.height - 2 * pad) / h);
+    const scale = Math.max(fit, floor, 0.15); // keep within minZoom
     pz.zoomAbs(0, 0, scale);
+    if (fit < scale) {
+      // Larger than the window at this scale: start at the top-left of the
+      // content, clear of the search box and the type chips on the left.
+      const chrome = document.getElementById("legend") || document.getElementById("search");
+      const left = chrome ? chrome.getBoundingClientRect().right + pad : pad;
+      pz.moveTo(left - minX * scale, pad + 48 - minY * scale);
+      return;
+    }
     pz.moveTo(
       (vp.width - w * scale) / 2 - minX * scale,
       (vp.height - h * scale) / 2 - minY * scale

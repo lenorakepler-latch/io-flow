@@ -266,6 +266,25 @@ flow becomes worth a new dependency.
 
 ---
 
+## Engine edge routing, row wrapping and the first view
+
+Three keys added 2026-10-24, after the SurveillanceBench status charts came out
+as one thin strip of unreadable boxes with curves crossing the boxes.
+
+| Key              | Default  | Effect |
+| ---------------- | -------- | ------ |
+| `edgeRouting:`   | `bezier` | `orthogonal`, `polyline` or `splines`: the engine routes the edges as well as placing the nodes, and io-flow draws that route (ELK → `elk.edgeRouting`; dagre always routes polylines). Edge labels are handed to the engine with an estimated size and drawn where it places them (`elk.edgeLabels.inline`). The route is kept only while both endpoints sit where the engine left them: dragging a node sends its edges back to the face-to-face curve, a collapse re-runs the layout, and a restored saved layout has no routes, so every edge there is a curve. `deoverlap: true` moves nodes after routing and so disables it. |
+| `wrap:`          | off      | ELK layered only. `true` (aspect ratio 1.6), a number (that ratio) or `{aspectRatio, strategy}` (`MULTI_EDGE` default, or `SINGLE_EDGE`): folds a long flow into rows so the whole chart approaches the ratio (`elk.layered.wrapping.strategy`, `elk.aspectRatio`). Pair it with `edgeRouting:`, since the curves cannot draw a wrap-back edge sensibly. |
+| `fitMinScale:`   | `0.5`    | The first view never zooms out past this scale. When the chart is larger than the window at that scale it opens on its top-left corner, clear of the search box and type chips, and the reader pans. `0` restores fit-everything. |
+
+A decision tree of twenty questions written left to right reads well with
+`direction: RIGHT`, `wrap: 1.8`, `edgeRouting: orthogonal`; a three-column
+source → treatment → sink chart reads well with `edgeRouting: orthogonal` and
+`elk: {elk.layered.layering.strategy: LONGEST_PATH}` so every source sits in
+the first column.
+
+---
+
 ## Which edges affect the layout
 
 By default every edge — even one hidden by a group toggle — shapes the layout,

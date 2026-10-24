@@ -44,8 +44,89 @@ window.IOFlow = window.IOFlow || {};
     if (graph.nodes.some((n) => typeof (n.data || {}).tier === "number")) {
       o["elk.partitioning.activate"] = "true";
     }
+    // `wrap:` folds a long layered flow into rows (ELK layered wrapping) so
+    // the whole chart approaches an aspect ratio instead of one thin strip:
+    // `wrap: true` (ratio 1.6), `wrap: 2.2` (that ratio), or
+    // `wrap: {aspectRatio: 2, strategy: SINGLE_EDGE}`.
+    if (cfg.wrap) {
+      const w = typeof cfg.wrap === "object" ? cfg.wrap : {};
+      const ratio = w.aspectRatio != null ? w.aspectRatio : typeof cfg.wrap === "number" ? cfg.wrap : 1.6;
+      o["elk.layered.wrapping.strategy"] = String(w.strategy || "MULTI_EDGE").toUpperCase();
+      o["elk.aspectRatio"] = String(ratio);
+    }
+    // `edgeRouting:` asks ELK to route the edges too (orthogonal, polyline
+    // or splines); edges.js then draws ELK's route until a node is dragged.
+    const routing = elkRouting(cfg);
+    if (routing) {
+      o["elk.edgeRouting"] = routing;
+      // ELK places the edge labels too (elkEdges hands it their sizes); inline
+      // puts each label on its edge, where the text halo covers the line.
+      o["elk.edgeLabels.inline"] = "true";
+      o["elk.spacing.edgeLabel"] = "6";
+    }
     Object.assign(o, cfg.elk || {});
     return o;
+  }
+
+  // Estimated box of an edge label for the layout engine (11px text; the
+  // SVG text is measured by nobody before layout, so this is a guess that
+  // errs wide).
+  function labelBox(text) {
+    return { width: Math.ceil(String(text).length * 6.2 + 8), height: 14 };
+  }
+
+  const ROUTING = { orthogonal: "ORTHOGONAL", polyline: "POLYLINE", splines: "SPLINES" };
+  function elkRouting(cfg) {
+    return ROUTING[String((cfg || {}).edgeRouting || "").toLowerCase()] || null;
+  }
+
+  // ELK's routes, as absolute canvas points keyed by the edge id elkEdges
+  // gave (`edge_<index into graph.edges>`). ELK lists an edge on a node and
+  // gives its points relative to that node (or to `container` when it moved
+  // the edge up the hierarchy), so every point is shifted by that node's
+  // absolute origin. One section per edge; a hyperedge's sections are
+  // concatenated in order.
+  function collectRoutes(laid) {
+    const abs = { root: { x: 0, y: 0 } };
+    (function walk(nodes, ox, oy) {
+      (nodes || []).forEach((n) => {
+        const x = ox + (n.x || 0);
+        const y = oy + (n.y || 0);
+        abs[n.id] = { x, y };
+        walk(n.children, x, y);
+      });
+    })(laid.children, 0, 0);
+    const routes = {};
+    (function walkEdges(node) {
+      (node.edges || []).forEach((e) => {
+        const o = abs[e.container] || abs[node.id] || abs.root;
+        const pts = [];
+        (e.sections || []).forEach((s) => {
+          pts.push(s.startPoint);
+          (s.bendPoints || []).forEach((p) => pts.push(p));
+          pts.push(s.endPoint);
+        });
+        if (pts.length < 2) return;
+        const route = pts.map((p) => ({ x: p.x + o.x, y: p.y + o.y }));
+        // The placed label, as its center, when ELK was given one.
+        const l = e.labels && e.labels[0];
+        if (l && l.x != null) {
+          route.label = { x: l.x + o.x + (l.width || 0) / 2, y: l.y + o.y + (l.height || 0) / 2 };
+        }
+        routes[e.id] = route;
+      });
+      (node.children || []).forEach(walkEdges);
+    })(laid);
+    return routes;
+  }
+
+  // Routes ride along with the positions map as a non-enumerable property,
+  // so applyPositions (which walks graph.nodes) and save.js never see them.
+  function withRoutes(pos, routes) {
+    if (routes && Object.keys(routes).length) {
+      Object.defineProperty(pos, "_routes", { value: routes, enumerable: false });
+    }
+    return pos;
   }
 
   // Room for the compound header (height owned by --header-h in viewer.css,
@@ -277,7 +358,10 @@ window.IOFlow = window.IOFlow || {};
       const t = rep(e.target);
       // Drop self-loops created by stack-remapping (but keep genuine ones).
       if (stackRoots && s === t && e.source !== e.target) return;
-      out.push({ id: "edge_" + i, sources: [s], targets: [t] });
+      const spec = { id: "edge_" + i, sources: [s], targets: [t] };
+      // With engine routing, ELK places the labels as well.
+      if (e.label && elkRouting(cfg)) spec.labels = [Object.assign({ text: String(e.label) }, labelBox(e.label))];
+      out.push(spec);
     });
     return out;
   }
@@ -408,7 +492,9 @@ window.IOFlow = window.IOFlow || {};
     elkEdges(graph, stackRoots).forEach((e) => {
       const s = e.sources[0];
       const t = e.targets[0];
-      if (g.hasNode(s) && g.hasNode(t)) g.setEdge(s, t, {}, e.id);
+      // Label sizes let dagre place the labels too (read back as ed.x/ed.y).
+      const l = e.labels && e.labels[0];
+      if (g.hasNode(s) && g.hasNode(t)) g.setEdge(s, t, l ? { width: l.width, height: l.height, labelpos: "c" } : {}, e.id);
     });
 
     dagre.layout(g);
@@ -450,7 +536,21 @@ window.IOFlow = window.IOFlow || {};
       pos[n.id] = { x, y, w: a.w, h };
     });
     if (stacks) Object.assign(pos, stacks.pos);
-    return pos;
+    // Dagre routes every edge (absolute points through its rank gaps); hand
+    // them on when the chart asked for engine routing, shifted like the nodes.
+    let routes = null;
+    if (elkRouting(cfg)) {
+      routes = {};
+      g.edges().forEach((e) => {
+        const ed = g.edge(e);
+        if (ed && ed.points && ed.points.length >= 2) {
+          const route = ed.points.map((p) => ({ x: p.x + shiftX, y: p.y + shiftY }));
+          if (ed.x != null && ed.width) route.label = { x: ed.x + shiftX, y: ed.y + shiftY };
+          routes[e.name] = route;
+        }
+      });
+    }
+    return withRoutes(pos, routes);
   }
 
   async function run(graph, domIndex, hints, stacks, collapsed) {
@@ -491,8 +591,10 @@ window.IOFlow = window.IOFlow || {};
     const laid = await elk.layout(elkGraph);
 
     // `diagram: deoverlap: true` — separate any overlapping boxes after layout.
-    // Makes force/stress usable (they don't keep compound boxes apart).
-    if ((graph.diagram || {}).deoverlap) {
+    // Makes force/stress usable (they don't keep compound boxes apart). It
+    // moves nodes after ELK routed the edges, so no route survives it.
+    const deoverlap = !!(graph.diagram || {}).deoverlap;
+    if (deoverlap) {
       const gap = Number((graph.diagram || {}).spacing) || 16;
       declump(laid, 16, gap, domIndex);
     }
@@ -507,7 +609,7 @@ window.IOFlow = window.IOFlow || {};
     // Stacked members never went through ELK; their planned positions join
     // the laid map here so state.pos (edges, drag, save) covers them too.
     if (stacks) Object.assign(pos, stacks.pos);
-    return pos;
+    return withRoutes(pos, elkRouting(graph.diagram) && !deoverlap ? collectRoutes(laid) : null);
   }
 
   IOF.layout = { run, planStacks };

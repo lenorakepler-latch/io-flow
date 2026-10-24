@@ -113,6 +113,9 @@ window.IOFlow = window.IOFlow || {};
       laid = await IOF.layout.run(graph, state.nodeEls, info.positions || {}, stacks);
     }
     applyPositions(state, laid);
+    // Engine edge routes (`diagram: edgeRouting:`); none on a restored layout,
+    // so those edges draw as face-to-face curves.
+    state.routes = laid._routes || null;
 
     // 4. Edges. Saved in-browser anchor overrides (layout: block `_anchors:`)
     // merge into edge.anchor first, layering over any YAML-declared anchors.
