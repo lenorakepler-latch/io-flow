@@ -253,6 +253,9 @@ window.IOFlow = window.IOFlow || {};
         if (s.w > width) width = s.w;
         return s;
       });
+      // A header longer than every row would spill over the first row; the
+      // rows widen to hold it instead.
+      width = Math.max(width, headerWidth(domIndex[id]) - 2 * PAD);
       let y = IOF.headerH(domIndex[id]) + 8; // below the header (+ body); matches compoundOptions
       kids.forEach((c, i) => {
         domIndex[c].style.width = width + "px"; // uniform rows
