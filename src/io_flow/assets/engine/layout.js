@@ -306,6 +306,13 @@ window.IOFlow = window.IOFlow || {};
         "elk.partitioning.partition": String(Math.round(tier)),
       });
     }
+    // `elk:` on a node: raw ELK options for that node alone, for example
+    // `elk: {elk.layered.layering.layerConstraint: FIRST}` to pin a node to
+    // the first layer. A partition (tier) only orders layers; this pins one.
+    const own = (node.data || {}).elk;
+    if (own && typeof own === "object") {
+      out.layoutOptions = Object.assign(out.layoutOptions || {}, own);
+    }
     // Feed a saved position as a placement hint (used with interactive mode on
     // a topology change; ignored gracefully otherwise).
     const h = hints && hints[node.id];

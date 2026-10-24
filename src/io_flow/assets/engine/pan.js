@@ -24,7 +24,9 @@ window.IOFlow = window.IOFlow || {};
     });
     state.pz = pz;
     state.getScale = () => pz.getTransform().scale;
-    fitAndCenter(state, pz);
+    // After every module has initialised: the type chips (ui.js) are built
+    // later in the same pass, and the fit measures the space beside them.
+    queueMicrotask(() => fitAndCenter(state, pz));
   }
 
   // Initial view: center the diagram in the viewport (zooming out to fit when
@@ -54,19 +56,23 @@ window.IOFlow = window.IOFlow || {};
     const pad = 24;
     const w = maxX - minX;
     const h = maxY - minY;
-    const fit = Math.min(1, (vp.width - 2 * pad) / w, (vp.height - 2 * pad) / h);
+    // The search box and the type chips occupy a strip down the left; the
+    // chart is fitted and centered in the space to their right, so a chart
+    // that fills the window never opens under them.
+    const chrome = document.getElementById("hud") || document.getElementById("legend") || document.getElementById("search");
+    const left = chrome ? Math.max(pad, chrome.getBoundingClientRect().right + pad) : pad;
+    const availW = vp.width - left - pad;
+    const fit = Math.min(1, availW / w, (vp.height - 2 * pad) / h);
     const scale = Math.max(fit, floor, 0.15); // keep within minZoom
     pz.zoomAbs(0, 0, scale);
     if (fit < scale) {
       // Larger than the window at this scale: start at the top-left of the
-      // content, clear of the search box and the type chips on the left.
-      const chrome = document.getElementById("legend") || document.getElementById("search");
-      const left = chrome ? chrome.getBoundingClientRect().right + pad : pad;
-      pz.moveTo(left - minX * scale, pad + 48 - minY * scale);
+      // content, beside the chrome.
+      pz.moveTo(left - minX * scale, pad - minY * scale);
       return;
     }
     pz.moveTo(
-      (vp.width - w * scale) / 2 - minX * scale,
+      left + (availW - w * scale) / 2 - minX * scale,
       (vp.height - h * scale) / 2 - minY * scale
     );
   }

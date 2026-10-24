@@ -277,6 +277,13 @@ as one thin strip of unreadable boxes with curves crossing the boxes.
 | `wrap:`          | off      | ELK layered only. `true` (aspect ratio 1.6), a number (that ratio) or `{aspectRatio, strategy}` (`MULTI_EDGE` default, or `SINGLE_EDGE`): folds a long flow into rows so the whole chart approaches the ratio (`elk.layered.wrapping.strategy`, `elk.aspectRatio`). Pair it with `edgeRouting:`, since the curves cannot draw a wrap-back edge sensibly. |
 | `fitMinScale:`   | `0.5`    | The first view never zooms out past this scale. When the chart is larger than the window at that scale it opens on its top-left corner, clear of the search box and type chips, and the reader pans. `0` restores fit-everything. |
 
+`elk:` on a node (not under `diagram:`) passes raw ELK options to that node
+alone: `elk: {elk.layered.layering.layerConstraint: FIRST}` pins it to the
+first layer, `LAST` to the last. A `tier:` only orders partitions; inline edge
+labels take a layer of their own, so two nodes of one tier can still land in
+different layers when only one of them has a labelled edge. The layer
+constraint is the way to hold a column together.
+
 A decision tree of twenty questions written left to right reads well with
 `direction: RIGHT`, `wrap: 1.8`, `edgeRouting: orthogonal`; a three-column
 source → treatment → sink chart reads well with `edgeRouting: orthogonal` and
